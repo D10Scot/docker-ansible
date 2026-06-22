@@ -195,3 +195,20 @@ a job holding publish credentials, so a poisoned scanner has nothing to exfiltra
   regresses — the other three scanners stand alone if it is dropped.
 - Lockfile regeneration must run inside each base image; `uv` has known rough edges
   refreshing hashes in place — `lock.yml` regenerates from scratch to avoid that.
+
+---
+
+## Implementation deviations (recorded 2026-06-22)
+
+These differ from the design above; all were forced by reality during bring-up and verified green in CI:
+
+1. **Debian base bookworm(12) → trixie(13).** `ansible-core 2.21` requires Python ≥3.12; Debian 12 ships 3.11. Trixie ships 3.13. This keeps all three distros on the same current ansible (14.0.0 / core 2.21.1 / lint 26.4.0), which also fixes `CVE-2025-14010` (ansible <12.2.0).
+2. **Per-arch lockfiles (18), not 9 + `--universal`.** `uv ... --universal` is unsatisfiable because `ansible-lint` pulls a yanked win32-only sentinel; resolving per `--python-platform` (amd64/arm64) inside each base image avoids it and is arch-correct. Dockerfiles select by `TARGETARCH`. `setuptools` is pinned in the lockfiles (Debian's venv shipped a CVE-affected 66.x).
+3. **Scanners as digest-pinned containers where the action was unusable.** OSV-Scanner and pip-audit run as pinned containers (`ghcr.io/google/osv-scanner@sha256:…`, `python:3.13-slim@sha256:…`) rather than marketplace actions; lockfile scanners run on the per-arch lockfile, image scanners (Trivy/Grype) on the docker-archive.
+4. **Vuln-gate policy: block on fixable CRITICAL (OS) + ANY python vuln; report HIGH→code scanning.** Strict HIGH gating on OS packages is unwinnable while a distro's fix is in-flight (e.g. util-linux CVE-2026-536xx "fixed per tracker, not yet released"). The python layer we fully control is gated strictly. Weekly rebuild absorbs OS fixes as they land.
+5. **Publish integrated into `build.yml` as a `publish` job** (gated `needs: build-scan`, non-PR) rather than a separate `release.yml`, which guarantees scan-before-publish in one workflow. Images are rebuilt multi-arch from identical pinned inputs (reproducible), pushed, cosign-signed, and SBOM+provenance-attested.
+6. **Trivy image scan = `vuln` only.** Secret scanning flagged example creds in bundled ansible-collection source (false positives) → gitleaks covers our secrets; hadolint covers Dockerfile misconfig.
+
+**Verified (2026-06-22):** `cosign verify` (identity-pinned to the publish workflow, Rekor-logged), `gh attestation verify` for SLSA provenance (`https://slsa.dev/provenance/v1`) and SBOM (`https://spdx.dev/Document/v2.3`) all pass against `ghcr.io/d10scot/ansible`.
+
+**Outstanding manual/operator steps:** add `DOCKERHUB_TOKEN` secret + `DOCKERHUB_USERNAME` var to activate the Docker Hub mirror; optional zizmor self-hardening (template-injection via env, persist-credentials:false) on our own workflows.
