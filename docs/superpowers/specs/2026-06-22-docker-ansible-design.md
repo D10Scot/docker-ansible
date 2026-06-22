@@ -102,13 +102,22 @@ docs/supply-chain.md         # transparency page
   is a hard error. This closes the "swap the artifact under a pinned version" window;
   SCA scanning (below) covers typosquats / known-bad releases it cannot.
 
-## CI — three-stage gate with credential isolation
+## CI — scan-before-publish, with credential isolation
 
-1. **`build`** (PR + main). buildx + QEMU; matrix distro×flavor; `linux/amd64,arm64`.
-   Pushes **by digest only, no tags** to GHCR. Emits BuildKit SBOM (`sbom: true`)
-   and SLSA provenance (`provenance: true, mode=max`).
-2. **`scan`** (no registry write, no `id-token`; secrets absent from scope). Pulls by
-   digest and runs:
+The pipeline **never pushes unscanned content to a public registry.** Images are
+built to local OCI archives, scanned there, and only the exact scanned bytes are
+published on pass. This designs away the "transient unscanned digest" problem
+entirely — there is nothing to garbage-collect, and we avoid the GHCR footgun where a
+naive "delete untagged digests" job would delete cosign signatures and SBOM/provenance
+attestations (which are themselves stored as untagged referrer manifests).
+
+1. **`build`** (PR + main). buildx + QEMU; matrix distro×flavor×arch
+   (`linux/amd64`, `linux/arm64`). Each build outputs to a **local OCI archive**
+   (`--output type=oci,dest=…`) — nothing reaches the public registry. Scanners read
+   image filesystems, not execute them, so an arm64 archive scans fine on an amd64
+   runner.
+2. **`scan`** (no registry write, no `id-token`; publish secrets absent from scope).
+   Runs against the local archives:
    - **Grype** — OS/distro package layers (Alpine SecDB, Debian/Ubuntu feeds).
    - **Trivy** — added for IaC/secrets/license breadth. Pinned to known-good
      `v0.35.0` **by full commit SHA**; vulnerability DB **mirrored into our own GHCR**
@@ -116,13 +125,17 @@ docs/supply-chain.md         # transparency page
    - **OSV-Scanner** — independent OSV.dev matcher, run `--offline`.
    - **pip-audit** — Python deps from the lockfile (PyPA + OSV advisory DBs).
    - Results uploaded as SARIF → GitHub code scanning. Configurable severity gate.
-3. **`sign-and-promote`** (main/tags only; runs only if `scan` passes). cosign keyless
-   `--recursive` sign by digest (OIDC `id-token`); `actions/attest-build-provenance`
-   + `actions/attest-sbom` with `push-to-registry: true`; **then** apply human-facing
-   tags via `docker/metadata-action` and mirror to Docker Hub.
+3. **`publish`** (main/tags only; runs only if `scan` passes). Pushes the **exact
+   scanned OCI archive** to GHCR + Docker Hub via `skopeo copy oci-archive:…` /
+   `crane` — preserving digests, so the published artifact is byte-identical to what
+   was scanned (no TOCTOU/rebuild gap). Assembles the multi-arch manifest, then:
+   cosign keyless `--recursive` sign by index digest (OIDC `id-token`); generate the
+   SBOM with **syft** and provenance via `actions/attest-build-provenance` +
+   `actions/attest-sbom` (`push-to-registry: true`) against the final digest; apply
+   human-facing tags via `docker/metadata-action`; sync README → Docker Hub.
 
-**Invariant:** unscanned digests are never tagged or signed. Scanners never run in a
-job that holds publish credentials, so a poisoned scanner has nothing to exfiltrate.
+**Invariants:** no unscanned digest is ever published or signed; scanners never run in
+a job holding publish credentials, so a poisoned scanner has nothing to exfiltrate.
 
 ## Supply-chain hardening (cross-cutting)
 
@@ -171,8 +184,10 @@ job that holds publish credentials, so a poisoned scanner has nothing to exfiltr
 
 ## Risks & open items
 
-- **Transient unscanned digests** exist in GHCR between `build` and `sign-and-promote`.
-  Mitigated by never tagging/signing them; optionally GC untagged digests on a schedule.
+- **No transient unscanned digests** by design — the scan-before-publish flow never
+  pushes unscanned content. We deliberately avoid a "delete untagged digests" GC step:
+  on GHCR, signatures and SBOM/provenance attestations are stored as untagged referrer
+  manifests, so such a job would silently delete them and break verification.
 - **Docker Hub attestation discoverability** is inherently weaker (no Referrers API);
   accepted, with verification steered to GHCR.
 - **Trivy inclusion** reintroduces a tool with a recent compromise; mitigated by
