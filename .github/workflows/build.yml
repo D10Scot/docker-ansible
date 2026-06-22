@@ -61,6 +61,7 @@ jobs:
         with:
           image: docker-archive:image.tar
           fail-build: true
+          only-fixed: true
           severity-cutoff: high
           output-format: sarif
           output-file: grype.sarif
