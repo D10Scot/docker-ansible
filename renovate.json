@@ -1,0 +1,20 @@
+{
+  "$schema": "https://docs.renovatebot.com/renovate-schema.json",
+  "extends": [
+    "config:recommended",
+    "helpers:pinGitHubActionDigestsToSemver",
+    "docker:pinDigests"
+  ],
+  "pinDigests": true,
+  "minimumReleaseAge": "7 days",
+  "internalChecksFilter": "strict",
+  "schedule": ["before 6am on monday"],
+  "prHourlyLimit": 0,
+  "packageRules": [
+    { "matchManagers": ["github-actions"], "minimumReleaseAge": "14 days", "automerge": false },
+    { "description": "Never silently re-point an action SHA within the same tag", "matchManagers": ["github-actions"], "matchUpdateTypes": ["pinDigest"], "matchFileNames": [".github/workflows/**"], "enabled": false },
+    { "description": "Automerge base image digest bumps after cooldown + green CI", "matchDatasources": ["docker"], "matchUpdateTypes": ["digest"], "automerge": true, "automergeType": "branch" },
+    { "description": "Automerge python patch bumps after cooldown + green CI", "matchManagers": ["pip_requirements"], "matchUpdateTypes": ["patch", "pin"], "automerge": true, "automergeType": "branch" },
+    { "groupName": "ansible core+full+lint", "matchPackageNames": ["ansible-core", "ansible", "ansible-lint"] }
+  ]
+}
