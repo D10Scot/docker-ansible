@@ -4,3 +4,6 @@ sbom*.json
 *.sarif
 .venv/
 __pycache__/
+
+# stray tool logs
+*.log
