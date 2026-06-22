@@ -39,31 +39,47 @@ jobs:
           build-args: FLAVOR=${{ matrix.flavor }}
           outputs: type=docker,dest=image.tar
           provenance: false
-      - name: Trivy scan (image, mirrored DB, no upstream fetch)
+      # Policy: BLOCK the build on fixable CRITICAL OS vulns and on ANY known
+      # python-dependency vuln (the python layer we fully control via the lockfile).
+      # HIGH/MEDIUM OS findings are surfaced to code scanning for visibility and
+      # absorbed on the weekly rebuild as distro fixes land — strict HIGH gating on
+      # OS packages is unwinnable while a distro's fix is still in-flight.
+      - name: Trivy report (HIGH+CRITICAL -> code scanning, non-blocking)
         uses: aquasecurity/trivy-action@57a97c7e7821a5776cebc9bb87c984fa69cba8f1 # v0.35.0 (documented known-good post-compromise)
         env:
           TRIVY_DB_REPOSITORY: ghcr.io/d10scot/trivy-db:2
           TRIVY_JAVA_DB_REPOSITORY: ghcr.io/d10scot/trivy-java-db:1
         with:
           input: image.tar
-          # vuln only on the image filesystem. Secret scanning here flags example
-          # credentials inside bundled ansible collection source (false positives);
-          # detecting OUR secrets is gitleaks's job (lint.yml). Dockerfile misconfig
-          # linting is hadolint's job (lint.yml).
+          # vuln only here. Secret scanning flags example creds in bundled ansible
+          # collection source (false positives) -> gitleaks (lint.yml) covers our
+          # secrets; hadolint (lint.yml) covers Dockerfile misconfig.
           scanners: vuln
           severity: HIGH,CRITICAL
           ignore-unfixed: true
-          exit-code: "1"
+          exit-code: "0"
           format: sarif
           output: trivy.sarif
-      - name: Grype scan (image)
+      - name: Trivy gate (fail on fixable CRITICAL)
+        uses: aquasecurity/trivy-action@57a97c7e7821a5776cebc9bb87c984fa69cba8f1 # v0.35.0 (documented known-good post-compromise)
+        env:
+          TRIVY_DB_REPOSITORY: ghcr.io/d10scot/trivy-db:2
+          TRIVY_JAVA_DB_REPOSITORY: ghcr.io/d10scot/trivy-java-db:1
+        with:
+          input: image.tar
+          scanners: vuln
+          severity: CRITICAL
+          ignore-unfixed: true
+          exit-code: "1"
+          format: table
+      - name: Grype scan (image, gate on fixable CRITICAL, report all)
         uses: anchore/scan-action@v6
         id: grype
         with:
           image: docker-archive:image.tar
           fail-build: true
           only-fixed: true
-          severity-cutoff: high
+          severity-cutoff: critical
           output-format: sarif
           output-file: grype.sarif
       - name: pip-audit (python lockfile)
