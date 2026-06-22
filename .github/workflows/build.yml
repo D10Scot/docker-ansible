@@ -40,7 +40,7 @@ jobs:
           outputs: type=oci,dest=image.tar
           provenance: false
       - name: Trivy scan (image, mirrored DB, no upstream fetch)
-        uses: aquasecurity/trivy-action@0.28.0
+        uses: aquasecurity/trivy-action@57a97c7e7821a5776cebc9bb87c984fa69cba8f1 # v0.35.0 (documented known-good post-compromise)
         env:
           TRIVY_DB_REPOSITORY: ghcr.io/d10scot/trivy-db:2
           TRIVY_JAVA_DB_REPOSITORY: ghcr.io/d10scot/trivy-java-db:1
@@ -63,11 +63,11 @@ jobs:
           output-format: sarif
           output-file: grype.sarif
       - name: pip-audit (python lockfile)
-        uses: pypa/gh-action-pip-audit@v1
+        uses: pypa/gh-action-pip-audit@1220774d901786e6f652ae159f7b6bc8fea6d266 # v1.1.0
         with:
           inputs: requirements/${{ matrix.distro }}-${{ matrix.flavor }}-${{ matrix.arch }}.txt
       - name: OSV-Scanner (python lockfile, offline)
-        uses: google/osv-scanner-action@v2
+        uses: google/osv-scanner-action@9a498708959aeaef5ef730655706c5a1df1edbc2 # v2.3.8
         with:
           scan-args: |-
             --lockfile=requirements/${{ matrix.distro }}-${{ matrix.flavor }}-${{ matrix.arch }}.txt
