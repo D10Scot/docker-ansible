@@ -82,14 +82,20 @@ jobs:
           severity-cutoff: critical
           output-format: sarif
           output-file: grype.sarif
-      - name: pip-audit (python lockfile)
-        uses: pypa/gh-action-pip-audit@1220774d901786e6f652ae159f7b6bc8fea6d266 # v1.1.0
-        with:
-          inputs: requirements/${{ matrix.distro }}-${{ matrix.flavor }}-${{ matrix.arch }}.txt
-          # Audit the already-fully-resolved, hash-pinned lockfile as-is; do not
-          # re-resolve/install (which would fail when the lockfile targets a newer
-          # Python than the audit runner, e.g. Debian trixie's 3.13).
-          no-deps: true
+      - name: pip-audit (python lockfile, digest-pinned container)
+        # Run pip-audit via a digest-pinned container with --no-deps so it audits
+        # every pinned line in our already-fully-resolved lockfile WITHOUT a
+        # dry-run reinstall. The pypa action force-enables require-hashes + a
+        # dry-run install, which fails when the lockfile targets a newer Python
+        # (Debian trixie 3.13) than the runner (3.12) and a py3.12-only transitive
+        # would be required. python:3.13 covers all our lockfiles.
+        run: |
+          docker run --rm -v "$PWD:/src" -w /src \
+            python:3.13-slim@sha256:c33f0bc4364a6881bed1ec0cc2665e6c53c87a43e774aaeab88e6f17af105e4f \
+            sh -ceu '
+              pip install --no-cache-dir --quiet pip-audit==2.10.1
+              pip-audit --no-deps -r "requirements/${{ matrix.distro }}-${{ matrix.flavor }}-${{ matrix.arch }}.txt"
+            '
       - name: OSV-Scanner (python lockfile, digest-pinned container)
         # Run as a digest-pinned container rather than the marketplace action:
         # the action's root action.yml lacks a runs: section, and a pinned
