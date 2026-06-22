@@ -86,6 +86,10 @@ jobs:
         uses: pypa/gh-action-pip-audit@1220774d901786e6f652ae159f7b6bc8fea6d266 # v1.1.0
         with:
           inputs: requirements/${{ matrix.distro }}-${{ matrix.flavor }}-${{ matrix.arch }}.txt
+          # Audit the already-fully-resolved, hash-pinned lockfile as-is; do not
+          # re-resolve/install (which would fail when the lockfile targets a newer
+          # Python than the audit runner, e.g. Debian trixie's 3.13).
+          no-deps: true
       - name: OSV-Scanner (python lockfile, digest-pinned container)
         # Run as a digest-pinned container rather than the marketplace action:
         # the action's root action.yml lacks a runs: section, and a pinned

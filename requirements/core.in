@@ -1,5 +1,5 @@
 # Minimal Ansible control node.
-ansible-core==2.18.1
+ansible-core==2.21.1
 # Connection/transport helpers commonly needed even on core.
 cryptography
 jmespath

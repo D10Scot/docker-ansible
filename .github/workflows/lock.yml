@@ -12,7 +12,7 @@ jobs:
       matrix:
         include:
           - {distro: alpine, image: "alpine:3.22"}
-          - {distro: debian, image: "debian:12"}
+          - {distro: debian, image: "debian:13"}
           - {distro: ubuntu, image: "ubuntu:24.04"}
     steps:
       - uses: actions/checkout@v4
