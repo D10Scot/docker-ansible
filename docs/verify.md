@@ -33,7 +33,7 @@ cosign tree "$IMAGE"
 ```
 
 Substitute `full-alpine` for any other tag (e.g. `core-debian`, `lint-ubuntu`,
-`2.21.1-full-alpine`).
+`2.21-full-alpine`).
 
 ## What the checks prove
 

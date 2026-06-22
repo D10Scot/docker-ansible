@@ -24,12 +24,12 @@ docker run --rm -v "$PWD:/ansible" ghcr.io/d10scot/ansible:full-alpine \
 | `full-alpine` · `core-alpine` · `lint-alpine` | Rolling — rebuilt weekly with latest OS patches |
 | `full-debian` · `core-debian` · `lint-debian` | Rolling — Debian trixie (13, Python 3.13) |
 | `full-ubuntu` · `core-ubuntu` · `lint-ubuntu` | Rolling — latest Ubuntu LTS |
-| `<corever>-full-alpine` · `<corever>-core-debian` · … | Immutable — e.g. `2.21.1-full-alpine` |
+| `<corever>-full-alpine` · `<corever>-core-debian` · … | Immutable — e.g. `2.21-full-alpine` |
 
 **Flavors:**
-- `full` — `ansible` (all collections) + `ansible-lint`
 - `core` — `ansible-core` only
-- `lint` — `ansible-core` + `ansible-lint`
+- `full` — `ansible` (the community meta-package, i.e. ansible-core + all bundled collections)
+- `lint` — `full` + `ansible-lint`
 
 All tags are published to `ghcr.io/d10scot/ansible`, multi-arch (linux/amd64 +
 linux/arm64), and are digest-pinnable and signed. See [Supply chain security](#supply-chain-security) below.
