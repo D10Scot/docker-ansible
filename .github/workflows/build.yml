@@ -66,11 +66,14 @@ jobs:
         uses: pypa/gh-action-pip-audit@1220774d901786e6f652ae159f7b6bc8fea6d266 # v1.1.0
         with:
           inputs: requirements/${{ matrix.distro }}-${{ matrix.flavor }}-${{ matrix.arch }}.txt
-      - name: OSV-Scanner (python lockfile, offline)
-        uses: google/osv-scanner-action@9a498708959aeaef5ef730655706c5a1df1edbc2 # v2.3.8
-        with:
-          scan-args: |-
-            --lockfile=requirements/${{ matrix.distro }}-${{ matrix.flavor }}-${{ matrix.arch }}.txt
+      - name: OSV-Scanner (python lockfile, digest-pinned container)
+        # Run as a digest-pinned container rather than the marketplace action:
+        # the action's root action.yml lacks a runs: section, and a pinned
+        # container matches the project's "pin scanners by digest" posture.
+        run: |
+          docker run --rm -v "$PWD:/src" -w /src \
+            ghcr.io/google/osv-scanner:v2.3.8@sha256:64e86bec6df2466feea5137fc7c78fb3b7c21ec077f014d7130f64810e50676b \
+            scan source --lockfile="requirements/${{ matrix.distro }}-${{ matrix.flavor }}-${{ matrix.arch }}.txt"
       - name: Upload SARIF
         if: always()
         uses: github/codeql-action/upload-sarif@v3
