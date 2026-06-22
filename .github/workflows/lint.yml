@@ -1,0 +1,36 @@
+---
+name: Lint
+
+on:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  lint:
+    name: Lint
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: hadolint — alpine
+        run: docker run --rm -i hadolint/hadolint < images/alpine/Dockerfile
+
+      - name: hadolint — debian
+        run: docker run --rm -i hadolint/hadolint < images/debian/Dockerfile
+
+      - name: hadolint — ubuntu
+        run: docker run --rm -i hadolint/hadolint < images/ubuntu/Dockerfile
+
+      - name: actionlint
+        uses: rhysd/actionlint@v1
+
+      - name: zizmor
+        uses: zizmorcore/zizmor-action@v1
+
+      - name: gitleaks
+        uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
