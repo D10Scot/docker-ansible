@@ -3,3 +3,6 @@ ansible-core==2.18.1
 # Connection/transport helpers commonly needed even on core.
 cryptography
 jmespath
+# Keep setuptools current & hash-pinned: Debian's venv ships an old, CVE-affected
+# setuptools (66.x); pinning it here upgrades it consistently across all distros.
+setuptools

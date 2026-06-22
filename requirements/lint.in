@@ -7,3 +7,4 @@ jmespath
 mitogen
 pywinrm
 netaddr
+setuptools
