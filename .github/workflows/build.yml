@@ -46,7 +46,10 @@ jobs:
           TRIVY_JAVA_DB_REPOSITORY: ghcr.io/d10scot/trivy-java-db:1
         with:
           input: image.tar
-          scanners: vuln,secret,misconfig
+          # vuln+secret on the image filesystem; Dockerfile misconfig linting is
+          # hadolint's job (lint.yml). Misconfig here only flags templates that
+          # ship inside third-party packages (e.g. ansible's galaxy Dockerfile.j2).
+          scanners: vuln,secret
           severity: HIGH,CRITICAL
           ignore-unfixed: true
           exit-code: "1"
