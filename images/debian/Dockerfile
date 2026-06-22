@@ -18,6 +18,7 @@ FROM debian:12@sha256:49ba348354a28e39c70beffd6cf43bdb8d55d81ce4b746b0428717d054
 ARG FLAVOR
 ENV DEBIAN_FRONTEND=noninteractive
 RUN apt-get update \
+ && apt-get upgrade -y \
  && apt-get install -y --no-install-recommends \
       python3 openssh-client sshpass git rsync ca-certificates \
  && groupadd -g 1000 ansible \

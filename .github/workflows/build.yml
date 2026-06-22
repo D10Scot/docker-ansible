@@ -50,7 +50,6 @@ jobs:
           severity: HIGH,CRITICAL
           ignore-unfixed: true
           exit-code: "1"
-          skip-db-update: true
           format: sarif
           output: trivy.sarif
       - name: Grype scan (image)

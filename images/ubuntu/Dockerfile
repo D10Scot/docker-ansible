@@ -18,6 +18,7 @@ FROM ubuntu:24.04@sha256:786a8b558f7be160c6c8c4a54f9a57274f3b4fb1491cf65146521ae
 ARG FLAVOR
 ENV DEBIAN_FRONTEND=noninteractive
 RUN apt-get update \
+ && apt-get upgrade -y \
  && apt-get install -y --no-install-recommends \
       python3 openssh-client sshpass git rsync ca-certificates \
  && userdel -r ubuntu \
