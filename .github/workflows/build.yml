@@ -7,13 +7,15 @@ on:
     paths: ["images/**", "requirements/**", ".github/workflows/build.yml"]
 permissions:
   contents: read
-  security-events: write
-  packages: read
 concurrency:
   group: build-${{ github.ref }}
   cancel-in-progress: true
 jobs:
   build-scan:
+    permissions:
+      contents: read
+      packages: read
+      security-events: write
     strategy:
       fail-fast: false
       matrix:
@@ -22,7 +24,9 @@ jobs:
         arch: [amd64, arm64]
     runs-on: ${{ matrix.arch == 'arm64' && 'ubuntu-24.04-arm' || 'ubuntu-latest' }}
     steps:
-      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7.0.0
+        with:
+          persist-credentials: false
       - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f  # v3
       - name: Authenticate to GHCR (for mirrored Trivy DB)
         uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9  # v3
@@ -89,21 +93,25 @@ jobs:
         # dry-run install, which fails when the lockfile targets a newer Python
         # (Debian trixie 3.13) than the runner (3.12) and a py3.12-only transitive
         # would be required. python:3.13 covers all our lockfiles.
+        env:
+          LOCKFILE: requirements/${{ matrix.distro }}-${{ matrix.flavor }}-${{ matrix.arch }}.txt
         run: |
-          docker run --rm -v "$PWD:/src" -w /src \
+          docker run --rm -v "$PWD:/src" -w /src -e LOCKFILE="$LOCKFILE" \
             python:3.13-slim@sha256:c33f0bc4364a6881bed1ec0cc2665e6c53c87a43e774aaeab88e6f17af105e4f \
             sh -ceu '
               pip install --no-cache-dir --quiet pip-audit==2.10.1
-              pip-audit --no-deps -r "requirements/${{ matrix.distro }}-${{ matrix.flavor }}-${{ matrix.arch }}.txt"
+              pip-audit --no-deps -r "$LOCKFILE"
             '
       - name: OSV-Scanner (python lockfile, digest-pinned container)
         # Run as a digest-pinned container rather than the marketplace action:
         # the action's root action.yml lacks a runs: section, and a pinned
         # container matches the project's "pin scanners by digest" posture.
+        env:
+          LOCKSPEC: "requirements.txt:requirements/${{ matrix.distro }}-${{ matrix.flavor }}-${{ matrix.arch }}.txt"
         run: |
-          docker run --rm -v "$PWD:/src" -w /src \
+          docker run --rm -v "$PWD:/src" -w /src -e LOCKSPEC="$LOCKSPEC" \
             ghcr.io/google/osv-scanner:v2.3.8@sha256:64e86bec6df2466feea5137fc7c78fb3b7c21ec077f014d7130f64810e50676b \
-            scan source --lockfile="requirements.txt:requirements/${{ matrix.distro }}-${{ matrix.flavor }}-${{ matrix.arch }}.txt"
+            scan source --lockfile="$LOCKSPEC"
       - name: Upload SARIF
         if: always()
         uses: github/codeql-action/upload-sarif@dd903d2e4f5405488e5ef1422510ee31c8b32357  # v3
@@ -130,7 +138,9 @@ jobs:
         distro: [alpine, debian, ubuntu]
         flavor: [core, full, lint]
     steps:
-      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7.0.0
+        with:
+          persist-credentials: false
       - uses: docker/setup-qemu-action@c7c53464625b32c7a7e944ae62b3e17d2b600130  # v3
       - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f  # v3
       - uses: sigstore/cosign-installer@dc72c7d5c4d10cd6bcb8cf6e3fd625a9e5e537da  # v3.7.0
@@ -188,13 +198,13 @@ jobs:
           format: spdx-json
           output-file: sbom.spdx.json
       - name: Attest build provenance (SLSA)
-        uses: actions/attest-build-provenance@e8998f949152b193b063cb0ec769d69d929409be  # v2
+        uses: actions/attest-build-provenance@a2bbfa25375fe432b6a289bc6b6cd05ecd0c4c32  # v4.1.0
         with:
           subject-name: ghcr.io/d10scot/ansible
           subject-digest: ${{ steps.build.outputs.digest }}
           push-to-registry: true
       - name: Attest SBOM
-        uses: actions/attest-sbom@bd218ad0dbcb3e146bd073d1d9c6d78e08aa8a0b  # v2
+        uses: actions/attest-sbom@c604332985a26aa8cf1bdc465b92731239ec6b9e  # v4.1.0
         with:
           subject-name: ghcr.io/d10scot/ansible
           subject-digest: ${{ steps.build.outputs.digest }}
