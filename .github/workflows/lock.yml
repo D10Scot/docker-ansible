@@ -15,7 +15,7 @@ jobs:
           - {distro: debian, image: "debian:13"}
           - {distro: ubuntu, image: "ubuntu:24.04"}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
       - name: Compile per-arch hashed lockfiles in ${{ matrix.distro }}
         # Resolve inside the real base image so the distro's Python version is used.
         # One lockfile per (distro, flavor, arch); --python-platform varies the arch,
@@ -35,5 +35,5 @@ jobs:
               done
             done
           '
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4
         with: {name: "lock-${{ matrix.distro }}", path: "requirements/${{ matrix.distro }}-*.txt"}
