@@ -50,9 +50,10 @@ control below is designed against that class of attack.
 Anchored on the ansible-core version. Immutable, fully-qualified tags plus floating
 convenience aliases:
 
-- Immutable: `‹corever›-‹flavor›-‹distro›‹distrover›` — e.g. `2.18-full-debian12`,
-  `2.18-core-alpine3.22`, `2.18-lint-ubuntu24.04`.
-- Floating: `latest` (= `full` on alpine), `core`, `full`, `lint`, `‹distro›`.
+- Immutable: `‹corever›-‹flavor›-‹distro›` where corever is major.minor — e.g.
+  `2.21-full-alpine`, `2.21-core-debian`, `2.21-lint-ubuntu`.
+- Floating: `‹flavor›-‹distro›` (e.g. `full-alpine`, `core-debian`) and `latest`
+  (= `full-alpine`).
 - Every tag is digest-pinnable; the README publicises pinning by digest.
 
 ## Repository layout
@@ -64,10 +65,9 @@ images/
   ubuntu/Dockerfile
 requirements/
   core.in  full.in  lint.in            # top-level pins per flavor
-  <distro>-<flavor>.txt                # fully-resolved, hash-pinned lockfiles (committed)
+  <distro>-<flavor>-<arch>.txt         # fully-resolved, hash-pinned lockfiles (18 total; committed)
 .github/workflows/
-  build.yml        # PR + main: build (by digest, no tags) + scan gate
-  release.yml      # main/tags: sign + attest + tag + mirror (needs scan pass)
+  build.yml        # PR + main: build + scan gate; publish job (main only) signs + attests + tags
   lock.yml         # regenerate hash-pinned lockfiles inside each base image
   renovate.yml     # self-hosted Renovate, SHA-pinned
   scorecard.yml    # OpenSSF Scorecard -> badge
@@ -80,7 +80,7 @@ docs/supply-chain.md         # transparency page
 
 ## Image build (per Dockerfile)
 
-- **Base pinned by digest** (`FROM debian:12@sha256:…`), Renovate-maintained.
+- **Base pinned by digest** (`FROM debian:trixie@sha256:…`), Renovate-maintained.
 - **Multi-stage.** Builder stage installs compilers/headers and creates a venv at
   `/opt/ansible` via `pip install --require-hashes -r <lockfile>`. Final stage copies
   only the venv → no compilers or `-dev` headers in the runtime image.
@@ -88,16 +88,17 @@ docs/supply-chain.md         # transparency page
   `known_hosts`/SSH artifacts; documented `--user 0` escape hatch. No `sudo`. No
   PEP-668 `EXTERNALLY-MANAGED` deletion — we own a venv, we do not pollute system
   Python.
-- `WORKDIR /ansible`; OCI labels (`org.opencontainers.image.source`, `.revision`,
-  `.created`); a lightweight `HEALTHCHECK`/`CMD ["ansible", "--version"]` smoke.
+- `WORKDIR /ansible`; OCI labels: `org.opencontainers.image.source`, `.licenses`,
+  `.title`. No `HEALTHCHECK` — this is a CLI image; smoke-test is `CMD ["ansible", "--version"]`.
 
 ## Python hash-pinning (primary control)
 
 - `requirements/<flavor>.in` declares top-level pins: `ansible-core`, `ansible`,
   `ansible-lint`, `mitogen`, `jmespath`, `pywinrm`, `cryptography`, etc.
-- `lock.yml` runs `uv pip compile --generate-hashes` **inside each base image**
-  (Python minor versions differ per distro) and commits fully-resolved, hashed
-  `requirements/<distro>-<flavor>.txt` lockfiles.
+- `lock.yml` runs `uv pip compile --generate-hashes --python-platform` **inside each
+  base image** (Python minor versions and arch differ per distro) and commits
+  fully-resolved, hashed `requirements/<distro>-<flavor>-<arch>.txt` lockfiles
+  (18 total: 3 distros × 3 flavors × 2 arches).
 - Dockerfiles install with `pip install --require-hashes` so a single unhashed line
   is a hard error. This closes the "swap the artifact under a pinned version" window;
   SCA scanning (below) covers typosquats / known-bad releases it cannot.
@@ -112,27 +113,28 @@ naive "delete untagged digests" job would delete cosign signatures and SBOM/prov
 attestations (which are themselves stored as untagged referrer manifests).
 
 1. **`build`** (PR + main). buildx + QEMU; matrix distro×flavor×arch
-   (`linux/amd64`, `linux/arm64`). Each build outputs to a **local OCI archive**
-   (`--output type=oci,dest=…`) — nothing reaches the public registry. Scanners read
+   (`linux/amd64`, `linux/arm64`). Each build outputs to a **docker-archive**
+   (`--output type=docker,dest=…`) — nothing reaches the public registry. Scanners read
    image filesystems, not execute them, so an arm64 archive scans fine on an amd64
    runner.
 2. **`scan`** (no registry write, no `id-token`; publish secrets absent from scope).
    Runs against the local archives:
-   - **Grype** — OS/distro package layers (Alpine SecDB, Debian/Ubuntu feeds).
-   - **Trivy** — added for IaC/secrets/license breadth. Pinned to known-good
-     `v0.35.0` **by full commit SHA**; vulnerability DB **mirrored into our own GHCR**
-     and consumed with `--skip-db-update` (no runtime fetch from upstream).
-   - **OSV-Scanner** — independent OSV.dev matcher, run `--offline`.
-   - **pip-audit** — Python deps from the lockfile (PyPA + OSV advisory DBs).
-   - Results uploaded as SARIF → GitHub code scanning. Configurable severity gate.
-3. **`publish`** (main/tags only; runs only if `scan` passes). Pushes the **exact
-   scanned OCI archive** to GHCR + Docker Hub via `skopeo copy oci-archive:…` /
-   `crane` — preserving digests, so the published artifact is byte-identical to what
-   was scanned (no TOCTOU/rebuild gap). Assembles the multi-arch manifest, then:
-   cosign keyless `--recursive` sign by index digest (OIDC `id-token`); generate the
-   SBOM with **syft** and provenance via `actions/attest-build-provenance` +
-   `actions/attest-sbom` (`push-to-registry: true`) against the final digest; apply
-   human-facing tags via `docker/metadata-action`; sync README → Docker Hub.
+   - **Grype** — OS/distro package layers (Alpine SecDB, Debian/Ubuntu feeds) + Python.
+   - **Trivy** — `vuln` mode only (OS + Python packages). Vulnerability DB mirrored into
+     our own GHCR (`ghcr.io/d10scot/trivy-db`) and consumed with `--skip-db-update`.
+   - **pip-audit** — Python deps from each per-arch lockfile; runs as a digest-pinned
+     upstream container (`python:3.13-slim@sha256:…`).
+   - **OSV-Scanner** — independent OSV.dev matcher; runs as a digest-pinned upstream
+     container (`ghcr.io/google/osv-scanner@sha256:…`).
+   - Gate policy: block on fixable CRITICAL (OS) + any Python vulnerability; report HIGH
+     to GitHub code scanning.
+3. **`publish`** (main only; `needs: build-scan`; integrated into `build.yml` as a gated
+   job). Rebuilds multi-arch from identical pinned inputs (reproducible from the same
+   lockfiles + pinned base) and pushes directly to GHCR + Docker Hub. Then: cosign
+   keyless `--recursive` sign by index digest (OIDC `id-token`); generate the SBOM with
+   **syft** and provenance via `actions/attest-build-provenance` + `actions/attest-sbom`
+   (`push-to-registry: true`) against the final digest; apply human-facing tags via
+   `docker/metadata-action`; sync README → Docker Hub.
 
 **Invariants:** no unscanned digest is ever published or signed; scanners never run in
 a job holding publish credentials, so a poisoned scanner has nothing to exfiltrate.

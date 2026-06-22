@@ -39,7 +39,9 @@ Together they give you a reproducible build that is also patched.
 ## 3. Python dependencies fully hash-pinned
 
 All Python packages (Ansible, ansible-lint, and their transitive deps) are installed
-from lockfiles (`requirements/*.txt`) generated with `pip-compile --generate-hashes`.
+from lockfiles (`requirements/*.txt`) generated with
+`uv pip compile --generate-hashes --python-platform` (one lockfile per
+distro × flavor × arch = 18 total).
 `pip install --require-hashes` enforces that _every_ package matches its recorded hash
 before installation.
 
@@ -73,8 +75,12 @@ scan jobs pass. This means that even if a scanner were itself compromised (e.g. 
 malicious Trivy DB), it could not push a backdoored image to the registry — it simply
 doesn't have the keys.
 
-Trivy's vulnerability DB and pip-audit are consumed as digest-pinned containers pulled
-from our own GHCR mirror, preventing a compromised upstream DB from being substituted.
+Trivy's vulnerability DB is mirrored to our own GHCR (`ghcr.io/d10scot/trivy-db`) and
+consumed with `--skip-db-update`, preventing a compromised upstream DB from being
+substituted. **pip-audit and OSV-Scanner run as digest-pinned upstream containers**
+(`python:3.13-slim@sha256:…` and `ghcr.io/google/osv-scanner@sha256:…`) — not from our
+mirror — so they always pull from the respective canonical registries at their pinned
+digest.
 
 ---
 
