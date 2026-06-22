@@ -37,7 +37,7 @@ jobs:
           file: images/${{ matrix.distro }}/Dockerfile
           platforms: linux/${{ matrix.arch }}
           build-args: FLAVOR=${{ matrix.flavor }}
-          outputs: type=oci,dest=image.tar
+          outputs: type=docker,dest=image.tar
           provenance: false
       - name: Trivy scan (image, mirrored DB, no upstream fetch)
         uses: aquasecurity/trivy-action@57a97c7e7821a5776cebc9bb87c984fa69cba8f1 # v0.35.0 (documented known-good post-compromise)
@@ -57,7 +57,7 @@ jobs:
         uses: anchore/scan-action@v6
         id: grype
         with:
-          image: oci-archive:image.tar
+          image: docker-archive:image.tar
           fail-build: true
           severity-cutoff: high
           output-format: sarif
