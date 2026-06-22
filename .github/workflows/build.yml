@@ -140,24 +140,18 @@ jobs:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
-      - name: Detect Docker Hub credentials
-        id: dh
-        env:
-          DH_PAT: ${{ secrets.DOCKERHUBPAT }}
-        run: |
-          if [ -n "$DH_PAT" ]; then echo "enabled=true" >> "$GITHUB_OUTPUT"; else echo "enabled=false" >> "$GITHUB_OUTPUT"; fi
       - name: Login to Docker Hub (only when configured)
-        if: steps.dh.outputs.enabled == 'true'
+        if: ${{ vars.DOCKERHUB_USERNAME != '' }}
         uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9  # v3
         with:
-          username: d10scot
-          password: ${{ secrets.DOCKERHUBPAT }}
+          username: ${{ vars.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
       - name: Compute tags
         id: meta
         env:
           DISTRO: ${{ matrix.distro }}
           FLAVOR: ${{ matrix.flavor }}
-          DH_ENABLED: ${{ steps.dh.outputs.enabled }}
+          DH_USER: ${{ vars.DOCKERHUB_USERNAME }}
         run: |
           set -euo pipefail
           CV=$(grep -E '^ansible-core==' "requirements/${DISTRO}-${FLAVOR}-amd64.txt" | sed -E 's/.*==([0-9]+\.[0-9]+).*/\1/')
@@ -166,7 +160,7 @@ jobs:
           add "ghcr.io/d10scot/ansible:${FLAVOR}-${DISTRO}"
           add "ghcr.io/d10scot/ansible:${CV}-${FLAVOR}-${DISTRO}"
           [ "${FLAVOR}-${DISTRO}" = "full-alpine" ] && add "ghcr.io/d10scot/ansible:latest"
-          if [ "${DH_ENABLED}" = "true" ]; then
+          if [ -n "${DH_USER}" ]; then
             add "docker.io/d10scot/ansible:${FLAVOR}-${DISTRO}"
             add "docker.io/d10scot/ansible:${CV}-${FLAVOR}-${DISTRO}"
             [ "${FLAVOR}-${DISTRO}" = "full-alpine" ] && add "docker.io/d10scot/ansible:latest"
