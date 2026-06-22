@@ -1,0 +1,7 @@
+failure-threshold: warning
+ignored:
+  - DL3008  # apt versions pinned via lockfile, not apt
+  - DL3018  # apk versions: runtime pkgs intentionally unpinned (Renovate covers bases)
+trustedRegistries:
+  - docker.io
+  - ghcr.io

@@ -1,0 +1,6 @@
+*.tar
+*.oci
+sbom*.json
+*.sarif
+.venv/
+__pycache__/
