@@ -110,3 +110,93 @@ jobs:
         with:
           sarif_file: .
           category: ${{ matrix.distro }}-${{ matrix.flavor }}-${{ matrix.arch }}
+
+  # Publish only after the full scan matrix passes, and never on PRs. Each image
+  # is rebuilt multi-arch from identical pinned inputs (base digest + hash-pinned
+  # lockfile + same Dockerfile => reproducible), pushed by digest, signed keyless
+  # with cosign, and given SBOM + SLSA build-provenance attestations.
+  publish:
+    needs: build-scan
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+      id-token: write
+      attestations: write
+    strategy:
+      fail-fast: false
+      matrix:
+        distro: [alpine, debian, ubuntu]
+        flavor: [core, full, lint]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-qemu-action@v3
+      - uses: docker/setup-buildx-action@v3
+      - uses: sigstore/cosign-installer@v3.7.0
+      - name: Login to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Login to Docker Hub (only when configured)
+        if: ${{ vars.DOCKERHUB_USERNAME != '' }}
+        uses: docker/login-action@v3
+        with:
+          username: ${{ vars.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+      - name: Compute tags
+        id: meta
+        env:
+          DISTRO: ${{ matrix.distro }}
+          FLAVOR: ${{ matrix.flavor }}
+          DH_USER: ${{ vars.DOCKERHUB_USERNAME }}
+        run: |
+          set -euo pipefail
+          CV=$(grep -E '^ansible-core==' "requirements/${DISTRO}-${FLAVOR}-amd64.txt" | sed -E 's/.*==([0-9]+\.[0-9]+).*/\1/')
+          add() { TAGS="${TAGS:+$TAGS,}$1"; }
+          TAGS=""
+          add "ghcr.io/d10scot/ansible:${FLAVOR}-${DISTRO}"
+          add "ghcr.io/d10scot/ansible:${CV}-${FLAVOR}-${DISTRO}"
+          [ "${FLAVOR}-${DISTRO}" = "full-alpine" ] && add "ghcr.io/d10scot/ansible:latest"
+          if [ -n "${DH_USER}" ]; then
+            add "docker.io/d10scot/ansible:${FLAVOR}-${DISTRO}"
+            add "docker.io/d10scot/ansible:${CV}-${FLAVOR}-${DISTRO}"
+            [ "${FLAVOR}-${DISTRO}" = "full-alpine" ] && add "docker.io/d10scot/ansible:latest"
+          fi
+          echo "tags=$TAGS" >> "$GITHUB_OUTPUT"
+      - name: Build and push (multi-arch, by digest)
+        id: build
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: images/${{ matrix.distro }}/Dockerfile
+          platforms: linux/amd64,linux/arm64
+          build-args: FLAVOR=${{ matrix.flavor }}
+          tags: ${{ steps.meta.outputs.tags }}
+          push: true
+          provenance: false
+      - name: cosign sign (keyless, recursive, by index digest)
+        env:
+          COSIGN_YES: "true"
+        run: cosign sign --recursive "ghcr.io/d10scot/ansible@${{ steps.build.outputs.digest }}"
+      - name: Generate SBOM (syft, SPDX)
+        uses: anchore/sbom-action@v0
+        with:
+          image: ghcr.io/d10scot/ansible@${{ steps.build.outputs.digest }}
+          format: spdx-json
+          output-file: sbom.spdx.json
+      - name: Attest build provenance (SLSA)
+        uses: actions/attest-build-provenance@v2
+        with:
+          subject-name: ghcr.io/d10scot/ansible
+          subject-digest: ${{ steps.build.outputs.digest }}
+          push-to-registry: true
+      - name: Attest SBOM
+        uses: actions/attest-sbom@v2
+        with:
+          subject-name: ghcr.io/d10scot/ansible
+          subject-digest: ${{ steps.build.outputs.digest }}
+          sbom-path: sbom.spdx.json
+          push-to-registry: true
