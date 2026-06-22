@@ -1,6 +1,0 @@
-# Limit universal lockfile resolution to Linux environments.
-# We only ship Linux (amd64 + arm64) images; constraining to Linux keeps both
-# arches' wheel hashes while dropping Windows/macOS marker branches. This avoids
-# unsatisfiable win32-only transitive deps (e.g. ansible-lint's yanked
-# `will-not-work-on-windows-try-from-wsl-instead` sentinel) during compile.
-environments = ["sys_platform == 'linux'"]

@@ -16,15 +16,23 @@ jobs:
           - {distro: ubuntu, image: "ubuntu:24.04"}
     steps:
       - uses: actions/checkout@v4
-      - name: Compile hashed lockfiles in ${{ matrix.distro }}
+      - name: Compile per-arch hashed lockfiles in ${{ matrix.distro }}
+        # Resolve inside the real base image so the distro's Python version is used.
+        # One lockfile per (distro, flavor, arch); --python-platform varies the arch,
+        # no --universal (which would pull ansible-lint's yanked win32-only sentinel).
         run: |
           set -euo pipefail
           docker run --rm -v "$PWD:/w" -w /w "${{ matrix.image }}" sh -ceu '
-            (command -v apk && apk add --no-cache python3 curl) || (apt-get update && apt-get install -y --no-install-recommends python3 curl ca-certificates)
+            (command -v apk >/dev/null && apk add --no-cache python3 curl) \
+              || (export DEBIAN_FRONTEND=noninteractive; apt-get update \
+                  && apt-get install -y --no-install-recommends python3 curl ca-certificates)
             curl -LsSf https://astral.sh/uv/install.sh | env UV_INSTALL_DIR=/usr/local/bin sh
-            for f in core full lint; do
-              uv pip compile --generate-hashes --universal \
-                "requirements/${f}.in" -o "requirements/${{ matrix.distro }}-${f}.txt"
+            for pair in "amd64:x86_64-unknown-linux-gnu" "arm64:aarch64-unknown-linux-gnu"; do
+              da=${pair%:*}; tri=${pair#*:}
+              for f in core full lint; do
+                uv pip compile --python-platform "$tri" --generate-hashes \
+                  "requirements/${f}.in" -o "requirements/${{ matrix.distro }}-${f}-${da}.txt"
+              done
             done
           '
       - uses: actions/upload-artifact@v4
