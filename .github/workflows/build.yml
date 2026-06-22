@@ -76,7 +76,7 @@ jobs:
         run: |
           docker run --rm -v "$PWD:/src" -w /src \
             ghcr.io/google/osv-scanner:v2.3.8@sha256:64e86bec6df2466feea5137fc7c78fb3b7c21ec077f014d7130f64810e50676b \
-            scan source --lockfile="requirements/${{ matrix.distro }}-${{ matrix.flavor }}-${{ matrix.arch }}.txt"
+            scan source --lockfile="requirements.txt:requirements/${{ matrix.distro }}-${{ matrix.flavor }}-${{ matrix.arch }}.txt"
       - name: Upload SARIF
         if: always()
         uses: github/codeql-action/upload-sarif@v3
