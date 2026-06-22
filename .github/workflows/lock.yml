@@ -1,0 +1,31 @@
+name: lock
+on:
+  workflow_dispatch:
+  push:
+    paths: ["requirements/*.in", ".github/workflows/lock.yml"]
+permissions:
+  contents: read
+jobs:
+  lock:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        include:
+          - {distro: alpine, image: "alpine:3.22"}
+          - {distro: debian, image: "debian:12"}
+          - {distro: ubuntu, image: "ubuntu:24.04"}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Compile hashed lockfiles in ${{ matrix.distro }}
+        run: |
+          set -euo pipefail
+          docker run --rm -v "$PWD:/w" -w /w "${{ matrix.image }}" sh -ceu '
+            (command -v apk && apk add --no-cache python3 curl) || (apt-get update && apt-get install -y --no-install-recommends python3 curl ca-certificates)
+            curl -LsSf https://astral.sh/uv/install.sh | env UV_INSTALL_DIR=/usr/local/bin sh
+            for f in core full lint; do
+              uv pip compile --generate-hashes --universal \
+                "requirements/${f}.in" -o "requirements/${{ matrix.distro }}-${f}.txt"
+            done
+          '
+      - uses: actions/upload-artifact@v4
+        with: {name: "lock-${{ matrix.distro }}", path: "requirements/${{ matrix.distro }}-*.txt"}
