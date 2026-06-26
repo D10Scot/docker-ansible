@@ -1,0 +1,44 @@
+name: dockerhub-overview
+# Sync the Docker Hub repository overview + short description from
+# docs/dockerhub-overview.md. Decoupled from image builds: the overview is static
+# scheme/posture content (it points to the Tags tab rather than enumerating tags),
+# so it only needs to update when the doc itself changes. Uses a plain curl call
+# rather than a third-party action to keep the supply chain minimal.
+on:
+  push:
+    branches: [main]
+    paths:
+      - docs/dockerhub-overview.md
+      - .github/workflows/dockerhub-overview.yml
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  sync:
+    if: ${{ vars.DOCKERHUB_USERNAME != '' }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7.0.0
+        with:
+          persist-credentials: false
+      - name: Sync Docker Hub overview (curl, no third-party action)
+        env:
+          DH_USER: ${{ vars.DOCKERHUB_USERNAME }}
+          DH_PASS: ${{ secrets.DOCKERHUB_TOKEN }}
+          DH_REPO: d10scot/ansible
+          SHORT_DESC: "Hardened multi-arch Ansible images: cosign-signed, SBOM + SLSA provenance. Canonical on GHCR."
+        run: |
+          set -euo pipefail
+          # Mint a short-lived JWT. Build JSON with jq (no secrets in argv/log).
+          token=$(jq -nc --arg u "$DH_USER" --arg p "$DH_PASS" '{username:$u,password:$p}' \
+            | curl -fsSL -H "Content-Type: application/json" -d @- \
+                https://hub.docker.com/v2/users/login/ \
+            | jq -r .token)
+          # PATCH overview + short description. --rawfile safely embeds the markdown.
+          jq -nc --rawfile full docs/dockerhub-overview.md --arg short "$SHORT_DESC" \
+              '{full_description:$full, description:$short}' \
+            | curl -fsSL -X PATCH -H "Authorization: JWT ${token}" \
+                -H "Content-Type: application/json" -d @- \
+                "https://hub.docker.com/v2/repositories/${DH_REPO}/" \
+            | jq -e '.full_description != null' >/dev/null
+          echo "Docker Hub overview updated for ${DH_REPO}"

@@ -210,38 +210,3 @@ jobs:
           subject-digest: ${{ steps.build.outputs.digest }}
           sbom-path: sbom.spdx.json
           push-to-registry: true
-
-  # Single run, not part of the publish matrix — keeps the Docker Hub overview/short
-  # description in sync with docs/dockerhub-overview.md. Uses a plain curl call rather
-  # than a third-party action to keep the release path's supply chain minimal.
-  dockerhub-overview:
-    needs: publish
-    if: ${{ github.event_name != 'pull_request' && vars.DOCKERHUB_USERNAME != '' }}
-    runs-on: ubuntu-latest
-    permissions:
-      contents: read
-    steps:
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7.0.0
-        with:
-          persist-credentials: false
-      - name: Sync Docker Hub overview (curl, no third-party action)
-        env:
-          DH_USER: ${{ vars.DOCKERHUB_USERNAME }}
-          DH_PASS: ${{ secrets.DOCKERHUB_TOKEN }}
-          DH_REPO: d10scot/ansible
-          SHORT_DESC: "Hardened multi-arch Ansible images: cosign-signed, SBOM + SLSA provenance. Canonical on GHCR."
-        run: |
-          set -euo pipefail
-          # Mint a short-lived JWT. Build JSON with jq (no secrets in argv/log).
-          token=$(jq -nc --arg u "$DH_USER" --arg p "$DH_PASS" '{username:$u,password:$p}' \
-            | curl -fsSL -H "Content-Type: application/json" -d @- \
-                https://hub.docker.com/v2/users/login/ \
-            | jq -r .token)
-          # PATCH overview + short description. --rawfile safely embeds the markdown.
-          jq -nc --rawfile full docs/dockerhub-overview.md --arg short "$SHORT_DESC" \
-              '{full_description:$full, description:$short}' \
-            | curl -fsSL -X PATCH -H "Authorization: JWT ${token}" \
-                -H "Content-Type: application/json" -d @- \
-                "https://hub.docker.com/v2/repositories/${DH_REPO}/" \
-            | jq -e '.full_description != null' >/dev/null
-          echo "Docker Hub overview updated for ${DH_REPO}"
