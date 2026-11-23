@@ -50,6 +50,13 @@ for d in alpine debian; do for a in amd64 arm64; do
   printf 'cryptography==46.0.0 \\\n    --hash=sha256:ff\n' >>"$root/marker/requirements/$d-core-$a.txt"; done; done
 run_case marker 0 "pin with '; marker' is compared on its version"
 
+fresh markerbad
+printf 'cryptography==46.0.1 ; sys_platform == "linux"\n' >>"$root/markerbad/requirements/core.in"
+for d in alpine debian; do for a in amd64 arm64; do
+  printf 'cryptography==46.0.0 \\\n    --hash=sha256:ff\n' >>"$root/markerbad/requirements/$d-core-$a.txt"; done; done
+run_case markerbad 1 "marker pin with a WRONG version fails (marker lines are not skipped)" \
+  "MISMATCH: cryptography" "requirements/core.in" "46.0.1"
+
 fresh mismatch
 sed -i.bak 's/^PyYAML==6.0.3/PyYAML==6.0.4/' "$root/mismatch/requirements/full.in"
 run_case mismatch 1 "version mismatch fails naming package and file" \

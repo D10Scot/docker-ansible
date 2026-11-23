@@ -44,7 +44,7 @@ jobs:
       # Renovate's own validator (RE2 regex engine, as in production): a config that
       # fails validation halts ALL dependency updates for the repo.
       - name: renovate config validator
-        run: docker run --rm -v "$PWD:/repo:ro" -w /repo "$RENOVATE_IMAGE" renovate-config-validator --strict renovate.json
+        run: docker run --rm -v "$PWD:/repo:ro" -w /repo "$RENOVATE_IMAGE" renovate-config-validator --strict
 
       # Digest-pinned container: the rhysd/actionlint action builds from floating
       # golang:latest / alpine:latest images.
