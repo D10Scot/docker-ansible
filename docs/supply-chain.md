@@ -119,9 +119,12 @@ files are empty today.
    file unarchived. It reports both the scanned digests and each artifact's sha256
    as job outputs. It is kept apart from `verify` so that no scanner can modify an
    SBOM that is later attested.
-4. **promote:** only after verify and sbom pass, and only if this run's commit is
-   still `main`'s HEAD (checked with the GitHub API, failing closed). Without that
-   check, re-running an old run could move the rolling tags back to an older build.
+4. **promote:** only after verify and sbom pass. A **first attempt always publishes its
+   own commit**: first attempts on `main` are serialised by the concurrency group, and
+   a newer run evicts an older pending one. A **re-run of an older run is refused**. On
+   any re-run (`run_attempt > 1`), promote requires the run's commit to still be
+   `main`'s HEAD (checked with the GitHub API, failing closed), so it cannot move the
+   rolling tags back to an older build.
    It cosign-signs the index digest (recursively), attests build provenance on it,
    and attests the SBOMs after the checks below. Only then does it point the tags at
    that **same digest** with `docker buildx imagetools create`, on GHCR and (when

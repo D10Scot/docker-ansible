@@ -52,7 +52,9 @@ Every image is:
   is tagged and signed. Nothing is rebuilt after the scan.
 - Signed with [cosign keyless signing](docs/verify.md) tied to our GitHub Actions workflow identity
 - Accompanied by a **SLSA build-provenance attestation** and an **SBOM (SPDX) per
-  architecture**, attested on each platform manifest and on the multi-arch index
+  architecture**, attested on each platform manifest and on the multi-arch index.
+  Images published before the reusable publish workflow carry a single amd64-only
+  SBOM instead (see [`docs/known-defects.md`](docs/known-defects.md), I3)
 
 See [`docs/supply-chain.md`](docs/supply-chain.md) for a full explanation of every
 control and its rationale.

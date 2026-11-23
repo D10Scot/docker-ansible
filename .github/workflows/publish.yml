@@ -100,6 +100,8 @@ jobs:
       - uses: docker/setup-qemu-action@c7c53464625b32c7a7e944ae62b3e17d2b600130  # v3.7.0
         with:
           image: ${{ env.BINFMT_IMAGE }}
+          # Always pull binfmt by digest; never `docker load` it from the GHA cache.
+          cache-image: false
       - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f  # v3.12.0
         with:
           driver-opts: image=${{ env.BUILDKIT_IMAGE }}
@@ -323,24 +325,34 @@ jobs:
         run: |
           set -euo pipefail
           [[ "$DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]] || { echo "::error::bad digest '${DIGEST}'"; exit 1; }
-      # Re-running an old run's promote would move the rolling tags back to an older
-      # build. Refuse unless this run's commit is still main's HEAD. Fail closed if
-      # the API cannot answer.
-      - name: Refuse unless this commit is main's current HEAD
+      # A manual re-run of an OLDER run would move the rolling tags back to an older
+      # build. First attempts are safe: they are serialised by build.yml's
+      # concurrency group, and a newer run evicts an older pending one. So the check
+      # applies only on a re-run (run_attempt > 1): then this run's commit must still
+      # be main's HEAD, and an API error fails closed. A first attempt always
+      # publishes its own commit, even if a commit that triggers no build (for
+      # example a docs-only one, filtered by `paths`) landed on main meanwhile.
+      - name: On a re-run, refuse unless this commit is main's current HEAD
         env:
           GH_TOKEN: ${{ github.token }}
           RUN_SHA: ${{ github.sha }}
+          RUN_ATTEMPT: ${{ github.run_attempt }}
           REPO: ${{ github.repository }}
         run: |
           set -euo pipefail
+          [[ "$RUN_ATTEMPT" =~ ^[1-9][0-9]*$ ]] || { echo "::error::unexpected run_attempt '${RUN_ATTEMPT}'; refusing to promote"; exit 1; }
+          if [ "$RUN_ATTEMPT" -eq 1 ]; then
+            echo "first attempt: publishing this run's commit ${RUN_SHA}"
+            exit 0
+          fi
           head=$(gh api "repos/${REPO}/git/ref/heads/main" --jq '.object.sha') \
             || { echo "::error::cannot read main's HEAD from the GitHub API; refusing to promote"; exit 1; }
           [[ "$head" =~ ^[0-9a-f]{40}$ ]] || { echo "::error::unexpected main HEAD '${head}'; refusing to promote"; exit 1; }
           if [ "$head" != "$RUN_SHA" ]; then
-            echo "::error::this run is for ${RUN_SHA}, but main is now ${head}; refusing to promote (it would move tags backwards). A newer run publishes main."
+            echo "::error::re-run (attempt ${RUN_ATTEMPT}) of ${RUN_SHA}, but main is now ${head}; refusing to promote (it would move tags backwards). Re-run the latest run, or dispatch build.yml on main."
             exit 1
           fi
-          echo "main HEAD ${head} == run commit"
+          echo "re-run (attempt ${RUN_ATTEMPT}): main HEAD ${head} == run commit"
       - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f  # v3.12.0
         with:
           driver-opts: image=${{ env.BUILDKIT_IMAGE }}
