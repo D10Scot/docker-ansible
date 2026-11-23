@@ -7,32 +7,36 @@ on:
 permissions:
   contents: read
 
+env:
+  # Digest-pinned; the repo .hadolint.yaml is mounted (stdin mode never read it).
+  HADOLINT_IMAGE: hadolint/hadolint:v2.15.1@sha256:32dac94127fd60b7b7e3fbfc65e1383b9b5e25c9bfd7b8536de7a539fe68a12d
+
 jobs:
   lint:
     name: Lint
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7.0.0
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
           persist-credentials: false
 
       - name: hadolint — alpine
-        run: docker run --rm -i hadolint/hadolint < images/alpine/Dockerfile
+        run: docker run --rm -v "$PWD:/w:ro" -w /w "$HADOLINT_IMAGE" hadolint --config .hadolint.yaml images/alpine/Dockerfile
 
       - name: hadolint — debian
-        run: docker run --rm -i hadolint/hadolint < images/debian/Dockerfile
+        run: docker run --rm -v "$PWD:/w:ro" -w /w "$HADOLINT_IMAGE" hadolint --config .hadolint.yaml images/debian/Dockerfile
 
       - name: hadolint — ubuntu
-        run: docker run --rm -i hadolint/hadolint < images/ubuntu/Dockerfile
+        run: docker run --rm -v "$PWD:/w:ro" -w /w "$HADOLINT_IMAGE" hadolint --config .hadolint.yaml images/ubuntu/Dockerfile
 
       - name: actionlint
-        uses: rhysd/actionlint@a443f344ff32813837fa49f7aa6cbc478d770e62  # v1.7.9
+        uses: rhysd/actionlint@914e7df21a07ef503a81201c76d2b11c789d3fca  # v1.7.12
 
       - name: zizmor
-        uses: zizmorcore/zizmor-action@192e21d79ab29983730a13d1382995c2307fbcaa  # v0.5.7
+        uses: zizmorcore/zizmor-action@45d7276c9ca790aabd705e31ca99c6185c3e76dd  # v0.8.1
 
       - name: gitleaks
-        uses: gitleaks/gitleaks-action@ff98106e4c7b2bc287b24eaf42907196329070c7  # v2
+        uses: gitleaks/gitleaks-action@ff98106e4c7b2bc287b24eaf42907196329070c7  # v2.3.9
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

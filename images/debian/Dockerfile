@@ -1,7 +1,7 @@
 # syntax=docker/dockerfile:1
 ARG FLAVOR=full
 
-FROM debian:13@sha256:fe7312b5f05bf5f43fad76bcd8945642e4e47a68aefd1b73f447615899d0fac1 AS builder
+FROM debian:13@sha256:9c6e381421d0f48d1b8133e573f33c185ee16cbf505eda9c4a8a4791b25ea8a6 AS builder
 ARG FLAVOR
 ARG TARGETARCH
 ENV PATH=/opt/ansible/bin:$PATH VIRTUAL_ENV=/opt/ansible DEBIAN_FRONTEND=noninteractive
@@ -14,7 +14,7 @@ COPY requirements/ /tmp/requirements/
 RUN /opt/ansible/bin/pip install --no-cache-dir --require-hashes \
       -r "/tmp/requirements/debian-${FLAVOR}-${TARGETARCH}.txt"
 
-FROM debian:13@sha256:fe7312b5f05bf5f43fad76bcd8945642e4e47a68aefd1b73f447615899d0fac1 AS runtime
+FROM debian:13@sha256:9c6e381421d0f48d1b8133e573f33c185ee16cbf505eda9c4a8a4791b25ea8a6 AS runtime
 ARG FLAVOR
 ENV DEBIAN_FRONTEND=noninteractive
 RUN apt-get update \

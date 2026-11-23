@@ -11,12 +11,12 @@ jobs:
       packages: write
     runs-on: ubuntu-latest
     steps:
-      - uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9  # v3
+      - uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9  # v3.7.0
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
-      - uses: oras-project/setup-oras@22ce207df3b08e061f537244349aac6ae1d214f6  # v1
+      - uses: oras-project/setup-oras@22ce207df3b08e061f537244349aac6ae1d214f6  # v1.2.4
       - name: Mirror trivy DBs into ghcr.io/d10scot
         run: |
           set -euo pipefail
