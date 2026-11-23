@@ -36,16 +36,16 @@ docker run --rm \
 - `<flavor>-<distro>` — rolling, rebuilt weekly with the latest OS patches
   (e.g. `full-alpine`, `core-debian`, `lint-ubuntu`).
 - `<corever>-<flavor>-<distro>` — pinned to an `ansible-core` minor when you want a
-  stable target (e.g. `2.21-core-debian`).
+  stable target (e.g. `2.22-core-debian`).
 - `latest` — alias for `full-alpine`.
 
 👉 See the **Tags** tab above for the full, current list.
 
 | Distro | Version | Architectures |
 |---|---|---|
-| Alpine | 3.22 | amd64 · arm64 |
+| Alpine | 3.24 | amd64 · arm64 |
 | Debian | 13 (trixie) | amd64 · arm64 |
-| Ubuntu | 24.04 LTS | amd64 · arm64 |
+| Ubuntu | 26.04 LTS | amd64 · arm64 |
 
 ## Why you'll like it
 

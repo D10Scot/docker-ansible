@@ -1,7 +1,7 @@
 # syntax=docker/dockerfile:1.29.0@sha256:572cebbc2b15e6f84c077742952674889cb63cd5e9b80abdffcbe587b6f19183
 ARG FLAVOR=full
 
-FROM ubuntu:24.04@sha256:9c7f200c07e3d4a03e7249d2c16bf66a51120fb876aa2242cf31451412543289 AS builder
+FROM ubuntu:26.04@sha256:d66b366dac61b575bee2aef07e9c26e8070096fbe84a3d4d3eb0da069b5d76db AS builder
 ARG FLAVOR
 ARG TARGETARCH
 ENV PATH=/opt/ansible/bin:$PATH VIRTUAL_ENV=/opt/ansible DEBIAN_FRONTEND=noninteractive
@@ -14,7 +14,7 @@ COPY requirements/ /tmp/requirements/
 RUN /opt/ansible/bin/pip install --no-cache-dir --require-hashes \
       -r "/tmp/requirements/ubuntu-${FLAVOR}-${TARGETARCH}.txt"
 
-FROM ubuntu:24.04@sha256:9c7f200c07e3d4a03e7249d2c16bf66a51120fb876aa2242cf31451412543289 AS runtime
+FROM ubuntu:26.04@sha256:d66b366dac61b575bee2aef07e9c26e8070096fbe84a3d4d3eb0da069b5d76db AS runtime
 ARG FLAVOR
 ENV DEBIAN_FRONTEND=noninteractive
 RUN apt-get update \

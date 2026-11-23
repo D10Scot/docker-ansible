@@ -24,7 +24,7 @@ docker run --rm -v "$PWD:/ansible" ghcr.io/d10scot/ansible:full-alpine \
 | `full-alpine` · `core-alpine` · `lint-alpine` | Rolling — rebuilt weekly with latest OS patches |
 | `full-debian` · `core-debian` · `lint-debian` | Rolling — Debian trixie (13, Python 3.13) |
 | `full-ubuntu` · `core-ubuntu` · `lint-ubuntu` | Rolling — latest Ubuntu LTS |
-| `<corever>-full-alpine` · `<corever>-core-debian` · … | Immutable — e.g. `2.21-full-alpine` |
+| `<corever>-full-alpine` · `<corever>-core-debian` · … | Immutable — e.g. `2.22-full-alpine` |
 
 **Flavors:**
 - `core` — `ansible-core` only
