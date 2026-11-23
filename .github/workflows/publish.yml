@@ -1,5 +1,5 @@
 name: publish
-# Reusable workflow: stage -> verify -> promote ONE image variant (distro x flavor).
+# Reusable workflow: stage -> (verify, sbom) -> promote ONE image variant (distro x flavor).
 #
 # Called only from build.yml's `publish` job, which runs only for refs/heads/main
 # (push, schedule or workflow_dispatch on main). Keeping the build, scan, signing
@@ -13,7 +13,9 @@ name: publish
 # that `verify` scanned and smoke-tested. Nothing is rebuilt after the scan.
 #   stage   - build multi-arch once, push to GHCR by digest, UNTAGGED (packages: write)
 #   verify  - per arch, scan + smoke-test that digest (read-only token)
-#   promote - sign + attest that digest, then point tags at it (no rebuild)
+#   sbom    - minimal job: digest-pinned syft per arch, upload unarchived (no scanners)
+#   promote - main-HEAD guard; sign, check + attest SBOMs, attest provenance;
+#             then point tags at that digest (no rebuild)
 on:
   workflow_call:
     inputs:
@@ -38,6 +40,16 @@ env:
   BINFMT_IMAGE: docker.io/tonistiigi/binfmt:qemu-v10.2.3@sha256:400a4873b838d1b89194d982c45e5fb3cda4593fbfd7e08a02e76b03b21166f0
   BUILDKIT_IMAGE: docker.io/moby/buildkit:v0.35.0@sha256:aa632b921ef07411d2cb77292cd34213d4f7b384001d6fceef1e1f25bf9752bb
   SYFT_IMAGE: ghcr.io/anchore/syft:v1.57.1@sha256:03215d0e98b661d0ecbc8575dbc14d65be1743b5de5df6410aecb7e80f95b060
+  # jq: true iff the SPDX document DESCRIBES exactly one package, and that package is
+  # the image whose manifest digest is $child (versionInfo + SHA256 checksum, as
+  # syft emits them for an image source).
+  SPDX_SUBJECT_CHECK: >-
+    . as $d
+    | [$d.relationships[] | select(.spdxElementId == "SPDXRef-DOCUMENT" and .relationshipType == "DESCRIBES") | .relatedSpdxElement] as $roots
+    | ($roots | length) == 1
+    and ([$d.packages[] | select(.SPDXID == $roots[0])] | length == 1
+         and (.[0] | .versionInfo == $child
+              and ([.checksums[] | select(.algorithm == "SHA256") | .checksumValue] == [$child | ltrimstr("sha256:")])))
 
 jobs:
   stage:
@@ -122,8 +134,8 @@ jobs:
     name: verify (${{ inputs.flavor }}-${{ inputs.distro }}, ${{ matrix.arch }})
     needs: stage
     # Read-only: no packages: write, no id-token, no security-events. Every scanner
-    # and the SBOM generator run here, so a poisoned tool has nothing to push or
-    # sign with.
+    # runs here, so a poisoned scanner has nothing to push or sign with. The SBOM is
+    # NOT made here (a scanner could tamper with it); see the `sbom` job.
     timeout-minutes: 45
     permissions:
       contents: read
@@ -166,7 +178,6 @@ jobs:
           child=$(jq -r --arg a "$ARCH" '.manifests[] | select(.platform.os == "linux" and .platform.architecture == $a) | .digest' <<<"$json")
           [[ "$child" =~ ^sha256:[0-9a-f]{64}$ ]] || { echo "::error::no single linux/${ARCH} manifest (got '${child}')"; exit 1; }
           echo "ref=${IMAGE}@${child}" >> "$GITHUB_OUTPUT"
-          echo "digest=${child}" >> "$GITHUB_OUTPUT"
           echo "linux/${ARCH}: ${IMAGE}@${child} (index ${INDEX_DIGEST})" | tee -a "$GITHUB_STEP_SUMMARY"
       - name: Check ignore-file expiry
         run: scripts/check-ignore-expiry.sh
@@ -216,38 +227,88 @@ jobs:
           uid=$(docker run --rm "$REF" id -u)
           [ "$uid" = "1000" ] || { echo "::error::image runs as uid ${uid}, expected 1000"; exit 1; }
           echo "smoke OK: ${first}; uid ${uid}"
-      # SBOM for THIS platform's manifest, generated here (read-only job) with a
-      # digest-pinned syft container, not in `promote`. The pull is anonymous (the
-      # package is public); no registry credential is given to syft.
-      - name: Generate SBOM (syft, SPDX) for this arch's digest
+
+  sbom:
+    name: sbom (${{ inputs.flavor }}-${{ inputs.distro }})
+    needs: stage
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    # Minimal on purpose. No checkout, no scanner and no third-party action other
+    # than actions/upload-artifact: between creation and upload, only the
+    # digest-pinned syft container and this job's own shell touch the SBOM files.
+    # It pulls anonymously (the package is public); no registry credential is used.
+    # One job for both arches (syft reads the image filesystem, so it needs no
+    # native runner): a matrix job cannot expose one output per leg.
+    permissions:
+      packages: read
+    outputs:
+      amd64: ${{ steps.children.outputs.amd64 }}
+      arm64: ${{ steps.children.outputs.arm64 }}
+      amd64_artifact_digest: ${{ steps.upload-amd64.outputs.artifact-digest }}
+      arm64_artifact_digest: ${{ steps.upload-arm64.outputs.artifact-digest }}
+    steps:
+      - name: Resolve per-arch digests of the staged index
+        id: children
         env:
-          CHILD: ${{ steps.child.outputs.digest }}
+          INDEX_DIGEST: ${{ needs.stage.outputs.digest }}
+        run: |
+          set -euo pipefail
+          [[ "$INDEX_DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]] || { echo "::error::bad index digest '${INDEX_DIGEST}'"; exit 1; }
+          json=$(docker buildx imagetools inspect --format '{{json .Manifest}}' "${IMAGE}@${INDEX_DIGEST}")
+          [ "$(jq -r '.digest' <<<"$json")" = "$INDEX_DIGEST" ] || { echo "::error::registry returned a different index"; exit 1; }
+          for arch in amd64 arm64; do
+            child=$(jq -r --arg a "$arch" '.manifests[] | select(.platform.os == "linux" and .platform.architecture == $a) | .digest' <<<"$json")
+            [[ "$child" =~ ^sha256:[0-9a-f]{64}$ ]] || { echo "::error::no single linux/${arch} manifest (got '${child}')"; exit 1; }
+            echo "${arch}=${child}" >> "$GITHUB_OUTPUT"
+          done
+      - name: Generate per-arch SBOMs (digest-pinned syft)
+        env:
+          AMD64: ${{ steps.children.outputs.amd64 }}
+          ARM64: ${{ steps.children.outputs.arm64 }}
+          DISTRO: ${{ inputs.distro }}
+          FLAVOR: ${{ inputs.flavor }}
         run: |
           set -euo pipefail
           mkdir -p sbom-out
-          docker run --rm --read-only --tmpfs /tmp:rw,mode=1777 -e HOME=/tmp \
-            --user "$(id -u):$(id -g)" -v "$PWD/sbom-out:/out" \
-            "$SYFT_IMAGE" scan "registry:${IMAGE}@${CHILD}" \
-            -o spdx-json=/out/sbom.spdx.json -q
-          jq -e '.spdxVersion == "SPDX-2.3" and (.packages | length) > 0' sbom-out/sbom.spdx.json >/dev/null \
-            || { echo "::error::syft produced no usable SPDX 2.3 SBOM"; exit 1; }
-          printf '%s\n' "$CHILD" > sbom-out/digest.txt
-      - name: Upload SBOM artifact
+          for arch in amd64 arm64; do
+            if [ "$arch" = amd64 ]; then child="$AMD64"; else child="$ARM64"; fi
+            out="sbom-${DISTRO}-${FLAVOR}-${arch}.spdx.json"
+            docker run --rm --read-only --tmpfs /tmp:rw,mode=1777 -e HOME=/tmp \
+              --user "$(id -u):$(id -g)" -v "$PWD/sbom-out:/out" \
+              "$SYFT_IMAGE" scan "registry:${IMAGE}@${child}" \
+              -o "spdx-json=/out/${out}" -q
+            # The SBOM must describe exactly this platform manifest.
+            jq -e --arg child "$child" "$SPDX_SUBJECT_CHECK" "sbom-out/${out}" >/dev/null \
+              || { echo "::error::${out} does not describe ${child}"; exit 1; }
+          done
+      # archive: false uploads the file as-is, so artifact-digest is the sha256 of
+      # the SBOM file itself (actions/artifact hashes the uploaded stream), which
+      # promote can recompute with sha256sum.
+      - name: Upload amd64 SBOM
+        id: upload-amd64
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9  # v7.0.2
         with:
-          name: sbom-${{ inputs.distro }}-${{ inputs.flavor }}-${{ matrix.arch }}
-          path: sbom-out/
+          path: sbom-out/sbom-${{ inputs.distro }}-${{ inputs.flavor }}-amd64.spdx.json
+          archive: false
+          if-no-files-found: error
+          retention-days: 7
+      - name: Upload arm64 SBOM
+        id: upload-arm64
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9  # v7.0.2
+        with:
+          path: sbom-out/sbom-${{ inputs.distro }}-${{ inputs.flavor }}-arm64.spdx.json
+          archive: false
           if-no-files-found: error
           retention-days: 7
 
   promote:
     name: promote (${{ inputs.flavor }}-${{ inputs.distro }})
-    needs: [stage, verify]
+    needs: [stage, verify, sbom]
     runs-on: ubuntu-latest
     timeout-minutes: 30
     # The only job holding signing (id-token), attestation and push rights. No
-    # scanner and no SBOM generator runs here: the SBOMs come from `verify` as
-    # artifacts. With these credentials run only: the docker login/buildx actions,
+    # scanner and no SBOM generator runs here: the SBOMs come from the `sbom` job as
+    # artifacts and are checked against that job's outputs before they are attested. With these credentials run only: the docker login/buildx actions,
     # cosign (fetched by cosign-installer), the attest and artifact actions, `gh api`
     # and `imagetools`. There is no checkout, so no repository script runs here.
     permissions:
@@ -308,33 +369,58 @@ jobs:
           subject-name: ghcr.io/d10scot/ansible
           subject-digest: ${{ needs.stage.outputs.digest }}
           push-to-registry: true
-      - name: Download per-arch SBOMs from verify
+      - name: Download per-arch SBOMs from the sbom job
         uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333  # v8.0.2
         with:
-          pattern: sbom-${{ inputs.distro }}-${{ inputs.flavor }}-*
+          pattern: sbom-${{ inputs.distro }}-${{ inputs.flavor }}-*.spdx.json
           path: sbom
-      # Each SBOM must belong to a platform manifest of THIS verified index: resolve
-      # the children again from the index digest and compare with what verify recorded.
-      - name: Match SBOMs to the verified index's per-arch digests
+          merge-multiple: true
+          # The default, stated explicitly: fail if the downloaded bytes do not hash
+          # to the digest GitHub recorded at upload.
+          digest-mismatch: error
+      # Trust chain, checked here before anything is attested:
+      #  1. each file's sha256 == the artifact-digest the `sbom` job itself reported
+      #     (a job output, which other jobs cannot write), so a re-uploaded or
+      #     swapped artifact is caught;
+      #  2. the per-arch digests the `sbom` job scanned == the children of the index
+      #     that `verify` passed, re-resolved here from the registry;
+      #  3. each SBOM's SPDX root package describes exactly that child digest.
+      - name: Verify SBOM integrity and subjects
         id: children
         env:
           DISTRO: ${{ inputs.distro }}
           FLAVOR: ${{ inputs.flavor }}
+          SBOM_AMD64: ${{ needs.sbom.outputs.amd64 }}
+          SBOM_ARM64: ${{ needs.sbom.outputs.arm64 }}
+          SBOM_AMD64_SHA: ${{ needs.sbom.outputs.amd64_artifact_digest }}
+          SBOM_ARM64_SHA: ${{ needs.sbom.outputs.arm64_artifact_digest }}
         run: |
           set -euo pipefail
           json=$(docker buildx imagetools inspect --format '{{json .Manifest}}' "${IMAGE}@${DIGEST}")
           [ "$(jq -r '.digest' <<<"$json")" = "$DIGEST" ] || { echo "::error::registry returned a different index"; exit 1; }
           for arch in amd64 arm64; do
-            child=$(jq -r --arg a "$arch" '.manifests[] | select(.platform.os == "linux" and .platform.architecture == $a) | .digest' <<<"$json")
-            [[ "$child" =~ ^sha256:[0-9a-f]{64}$ ]] || { echo "::error::no single linux/${arch} manifest"; exit 1; }
-            dir="sbom/sbom-${DISTRO}-${FLAVOR}-${arch}"
-            recorded=$(cat "${dir}/digest.txt")
-            if [ "$recorded" != "$child" ]; then
-              echo "::error::SBOM for ${arch} was made from ${recorded}, but the index holds ${child}"
+            if [ "$arch" = amd64 ]; then want="$SBOM_AMD64"; sha="$SBOM_AMD64_SHA"; else want="$SBOM_ARM64"; sha="$SBOM_ARM64_SHA"; fi
+            sha="${sha#sha256:}"
+            [[ "$sha" =~ ^[0-9a-f]{64}$ ]] || { echo "::error::sbom job reported no usable artifact digest for ${arch} ('${sha}')"; exit 1; }
+            file="sbom/sbom-${DISTRO}-${FLAVOR}-${arch}.spdx.json"
+            [ -f "$file" ] || { echo "::error::missing ${file}"; exit 1; }
+            got=$(sha256sum "$file" | cut -d' ' -f1)
+            if [ "$got" != "$sha" ]; then
+              echo "::error::${file} hashes to ${got}, but the sbom job uploaded ${sha}"
               exit 1
             fi
-            jq -e '.spdxVersion == "SPDX-2.3"' "${dir}/sbom.spdx.json" >/dev/null
+            child=$(jq -r --arg a "$arch" '.manifests[] | select(.platform.os == "linux" and .platform.architecture == $a) | .digest' <<<"$json")
+            [[ "$child" =~ ^sha256:[0-9a-f]{64}$ ]] || { echo "::error::no single linux/${arch} manifest"; exit 1; }
+            if [ "$child" != "$want" ]; then
+              echo "::error::sbom job scanned ${want} for ${arch}, but the verified index holds ${child}"
+              exit 1
+            fi
+            if ! jq -e --arg child "$child" "$SPDX_SUBJECT_CHECK" "$file" >/dev/null; then
+              echo "::error::${file} does not describe ${child}"
+              exit 1
+            fi
             echo "${arch}=${child}" >> "$GITHUB_OUTPUT"
+            echo "SBOM ${arch}: ${file} sha256:${got} describes ${child}" | tee -a "$GITHUB_STEP_SUMMARY"
           done
       # Subjects: each per-arch SBOM is attested against its own platform manifest
       # (what a runtime actually pulls) AND against the index digest, so
@@ -345,28 +431,28 @@ jobs:
         with:
           subject-name: ghcr.io/d10scot/ansible
           subject-digest: ${{ steps.children.outputs.amd64 }}
-          sbom-path: sbom/sbom-${{ inputs.distro }}-${{ inputs.flavor }}-amd64/sbom.spdx.json
+          sbom-path: sbom/sbom-${{ inputs.distro }}-${{ inputs.flavor }}-amd64.spdx.json
           push-to-registry: true
       - name: Attest SBOM (arm64 -> arm64 manifest)
         uses: actions/attest-sbom@c604332985a26aa8cf1bdc465b92731239ec6b9e  # v4.1.0
         with:
           subject-name: ghcr.io/d10scot/ansible
           subject-digest: ${{ steps.children.outputs.arm64 }}
-          sbom-path: sbom/sbom-${{ inputs.distro }}-${{ inputs.flavor }}-arm64/sbom.spdx.json
+          sbom-path: sbom/sbom-${{ inputs.distro }}-${{ inputs.flavor }}-arm64.spdx.json
           push-to-registry: true
       - name: Attest SBOM (amd64 -> index)
         uses: actions/attest-sbom@c604332985a26aa8cf1bdc465b92731239ec6b9e  # v4.1.0
         with:
           subject-name: ghcr.io/d10scot/ansible
           subject-digest: ${{ needs.stage.outputs.digest }}
-          sbom-path: sbom/sbom-${{ inputs.distro }}-${{ inputs.flavor }}-amd64/sbom.spdx.json
+          sbom-path: sbom/sbom-${{ inputs.distro }}-${{ inputs.flavor }}-amd64.spdx.json
           push-to-registry: true
       - name: Attest SBOM (arm64 -> index)
         uses: actions/attest-sbom@c604332985a26aa8cf1bdc465b92731239ec6b9e  # v4.1.0
         with:
           subject-name: ghcr.io/d10scot/ansible
           subject-digest: ${{ needs.stage.outputs.digest }}
-          sbom-path: sbom/sbom-${{ inputs.distro }}-${{ inputs.flavor }}-arm64/sbom.spdx.json
+          sbom-path: sbom/sbom-${{ inputs.distro }}-${{ inputs.flavor }}-arm64.spdx.json
           push-to-registry: true
       - name: Promote tags to the verified digest (no rebuild)
         env:
