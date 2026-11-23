@@ -1,0 +1,313 @@
+name: publish
+# Reusable workflow: stage -> verify -> promote ONE image variant (distro x flavor).
+#
+# Called only from build.yml's `publish` job, which runs only for refs/heads/main
+# (push, schedule or workflow_dispatch on main). Keeping the build, scan, signing
+# and attestation inside this reusable workflow isolates them from the caller
+# (SLSA v1 Build L3, per GitHub's "Using artifact attestations and reusable
+# workflows to achieve SLSA v1 Build Level 3"). It also changes the signer
+# identity: the Fulcio certificate SAN is this file's job_workflow_ref,
+#   https://github.com/D10Scot/docker-ansible/.github/workflows/publish.yml@refs/heads/main
+#
+# Invariant: the bytes that are tagged, signed and attested are the exact digest
+# that `verify` scanned and smoke-tested. Nothing is rebuilt after the scan.
+#   stage   - build multi-arch once, push to GHCR by digest, UNTAGGED (packages: write)
+#   verify  - per arch, scan + smoke-test that digest (read-only token)
+#   promote - sign + attest that digest, then point tags at it (no rebuild)
+on:
+  workflow_call:
+    inputs:
+      distro:
+        description: "alpine | debian | ubuntu"
+        required: true
+        type: string
+      flavor:
+        description: "core | full | lint"
+        required: true
+        type: string
+    secrets:
+      DOCKERHUB_TOKEN:
+        description: "Docker Hub push token (only used when vars.DOCKERHUB_USERNAME is set)"
+        required: false
+
+permissions: {}
+
+env:
+  IMAGE: ghcr.io/d10scot/ansible
+
+jobs:
+  stage:
+    name: stage (${{ inputs.flavor }}-${{ inputs.distro }})
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    outputs:
+      digest: ${{ steps.build.outputs.digest }}
+      core_version: ${{ steps.ver.outputs.core_version }}
+    steps:
+      - name: Validate inputs (allowlist)
+        env:
+          DISTRO: ${{ inputs.distro }}
+          FLAVOR: ${{ inputs.flavor }}
+        run: |
+          set -euo pipefail
+          case "$DISTRO" in alpine|debian|ubuntu) ;; *) echo "::error::bad distro '$DISTRO'"; exit 1;; esac
+          case "$FLAVOR" in core|full|lint) ;; *) echo "::error::bad flavor '$FLAVOR'"; exit 1;; esac
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Read ansible-core version from the lockfiles
+        id: ver
+        env:
+          DISTRO: ${{ inputs.distro }}
+          FLAVOR: ${{ inputs.flavor }}
+        run: |
+          set -euo pipefail
+          corever() {
+            sed -nE 's/^ansible-core==([0-9]+\.[0-9]+\.[0-9]+)([^0-9].*)?$/\1/p' \
+              "requirements/${DISTRO}-${FLAVOR}-$1.txt"
+          }
+          AMD=$(corever amd64)
+          ARM=$(corever arm64)
+          if ! [[ "$AMD" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error::no single ansible-core==X.Y.Z pin in requirements/${DISTRO}-${FLAVOR}-amd64.txt (got '${AMD}')"
+            exit 1
+          fi
+          if [ "$AMD" != "$ARM" ]; then
+            echo "::error::ansible-core differs between arches: amd64=${AMD} arm64=${ARM}"
+            exit 1
+          fi
+          echo "core_version=${AMD}" >> "$GITHUB_OUTPUT"
+      - uses: docker/setup-qemu-action@c7c53464625b32c7a7e944ae62b3e17d2b600130  # v3.7.0
+      - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f  # v3.12.0
+      - name: Login to GHCR
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9  # v3.7.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Build multi-arch and push by digest (untagged)
+        id: build
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8  # v6.19.2
+        with:
+          context: .
+          file: images/${{ inputs.distro }}/Dockerfile
+          platforms: linux/amd64,linux/arm64
+          build-args: FLAVOR=${{ inputs.flavor }}
+          # No tags: the digest is staged, not published. Tags are applied in
+          # `promote`, only after `verify` passes, by pointing at this digest.
+          outputs: type=image,name=ghcr.io/d10scot/ansible,push-by-digest=true,name-canonical=true,push=true
+          provenance: false
+          sbom: false
+      - name: Record staged digest
+        env:
+          DIGEST: ${{ steps.build.outputs.digest }}
+        run: |
+          set -euo pipefail
+          [[ "$DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]] || { echo "::error::unexpected digest '${DIGEST}'"; exit 1; }
+          echo "Staged ${IMAGE}@${DIGEST} (untagged)" | tee -a "$GITHUB_STEP_SUMMARY"
+
+  verify:
+    name: verify (${{ inputs.flavor }}-${{ inputs.distro }}, ${{ matrix.arch }})
+    needs: stage
+    # Read-only: no packages: write, no id-token, no security-events. A poisoned
+    # scanner here has nothing to push or sign with.
+    permissions:
+      contents: read
+      packages: read
+    strategy:
+      fail-fast: true
+      matrix:
+        arch: [amd64, arm64]
+    # Native runner per arch so the smoke test executes the real binary, not QEMU.
+    runs-on: ${{ matrix.arch == 'arm64' && 'ubuntu-24.04-arm' || 'ubuntu-latest' }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f  # v3.12.0
+      - name: Login to GHCR (read-only token; staged digest + mirrored Trivy DB)
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9  # v3.7.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Resolve this arch's manifest in the staged index
+        id: child
+        env:
+          INDEX_DIGEST: ${{ needs.stage.outputs.digest }}
+          ARCH: ${{ matrix.arch }}
+        run: |
+          set -euo pipefail
+          [[ "$INDEX_DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]] || { echo "::error::bad index digest '${INDEX_DIGEST}'"; exit 1; }
+          json=$(docker buildx imagetools inspect --format '{{json .Manifest}}' "${IMAGE}@${INDEX_DIGEST}")
+          got=$(jq -r '.digest' <<<"$json")
+          [ "$got" = "$INDEX_DIGEST" ] || { echo "::error::registry returned ${got} for ${INDEX_DIGEST}"; exit 1; }
+          plats=$(jq -r '[.manifests[] | "\(.platform.os)/\(.platform.architecture)"] | sort | join(",")' <<<"$json")
+          if [ "$plats" != "linux/amd64,linux/arm64" ]; then
+            echo "::error::staged index must hold exactly linux/amd64 + linux/arm64, got '${plats}'"
+            exit 1
+          fi
+          child=$(jq -r --arg a "$ARCH" '.manifests[] | select(.platform.os == "linux" and .platform.architecture == $a) | .digest' <<<"$json")
+          [[ "$child" =~ ^sha256:[0-9a-f]{64}$ ]] || { echo "::error::no single linux/${ARCH} manifest (got '${child}')"; exit 1; }
+          echo "ref=${IMAGE}@${child}" >> "$GITHUB_OUTPUT"
+          echo "linux/${ARCH}: ${IMAGE}@${child} (index ${INDEX_DIGEST})" | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: Check ignore-file expiry
+        run: scripts/check-ignore-expiry.sh
+      # Same policy as build.yml's PR gate: fixable HIGH + CRITICAL block.
+      # Exceptions only via the reviewed, expiring .trivyignore.yaml / .grype.yaml.
+      - name: Trivy gate (fail on fixable HIGH/CRITICAL)
+        uses: aquasecurity/trivy-action@57a97c7e7821a5776cebc9bb87c984fa69cba8f1 # v0.35.0 (documented known-good post-compromise)
+        env:
+          TRIVY_DB_REPOSITORY: ghcr.io/d10scot/trivy-db:2
+          TRIVY_JAVA_DB_REPOSITORY: ghcr.io/d10scot/trivy-java-db:1
+        with:
+          scan-type: image
+          image-ref: ${{ steps.child.outputs.ref }}
+          scanners: vuln
+          severity: HIGH,CRITICAL
+          ignore-unfixed: true
+          trivyignores: .trivyignore.yaml
+          exit-code: "1"
+          format: table
+      - name: Grype gate (fail on fixable HIGH/CRITICAL)
+        uses: anchore/scan-action@1638637db639e0ade3258b51db49a9a137574c3e  # v6.5.1
+        env:
+          GRYPE_CONFIG: .grype.yaml
+        with:
+          image: registry:${{ steps.child.outputs.ref }}
+          fail-build: true
+          only-fixed: true
+          severity-cutoff: high
+          output-format: table
+      - name: Smoke test (ansible runs, uid 1000, arch and core version match)
+        env:
+          REF: ${{ steps.child.outputs.ref }}
+          ARCH: ${{ matrix.arch }}
+          CORE_VERSION: ${{ needs.stage.outputs.core_version }}
+        run: |
+          set -euo pipefail
+          docker pull --quiet "$REF"
+          arch=$(docker image inspect --format '{{.Architecture}}' "$REF")
+          [ "$arch" = "$ARCH" ] || { echo "::error::pulled arch ${arch}, expected ${ARCH}"; exit 1; }
+          out=$(docker run --rm "$REF" ansible --version)
+          printf '%s\n' "$out"
+          first=$(head -n1 <<<"$out")
+          case "$first" in
+            *"[core ${CORE_VERSION}]"*) ;;
+            *) echo "::error::expected ansible-core ${CORE_VERSION}, got: ${first}"; exit 1;;
+          esac
+          uid=$(docker run --rm "$REF" id -u)
+          [ "$uid" = "1000" ] || { echo "::error::image runs as uid ${uid}, expected 1000"; exit 1; }
+          echo "smoke OK: ${first}; uid ${uid}"
+
+  promote:
+    name: promote (${{ inputs.flavor }}-${{ inputs.distro }})
+    needs: [stage, verify]
+    runs-on: ubuntu-latest
+    # The only job holding signing (id-token), attestation and push rights.
+    # No checkout: no repository code runs alongside these credentials.
+    permissions:
+      contents: read
+      packages: write
+      id-token: write
+      attestations: write
+    env:
+      DIGEST: ${{ needs.stage.outputs.digest }}
+    steps:
+      - name: Validate staged digest
+        run: |
+          set -euo pipefail
+          [[ "$DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]] || { echo "::error::bad digest '${DIGEST}'"; exit 1; }
+      - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f  # v3.12.0
+      - uses: sigstore/cosign-installer@7e8b541eb2e61bf99390e1afd4be13a184e9ebc5  # v3.10.1
+      - name: Login to GHCR
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9  # v3.7.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Login to Docker Hub (only when configured)
+        if: ${{ vars.DOCKERHUB_USERNAME != '' }}
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9  # v3.7.0
+        with:
+          username: ${{ vars.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+      # Sign and attest BEFORE any tag points at the digest, so no tag ever
+      # resolves to an unsigned image, and a signing failure publishes nothing.
+      - name: cosign sign (keyless, recursive, by index digest)
+        env:
+          COSIGN_YES: "true"
+        run: cosign sign --recursive "${IMAGE}@${DIGEST}"
+      - name: Generate SBOM (syft, SPDX) from the verified digest
+        uses: anchore/sbom-action@66cbf4bc1f1c0d2edc94016e65bc221b6bb0ad6c  # v0.24.3
+        with:
+          image: ghcr.io/d10scot/ansible@${{ needs.stage.outputs.digest }}
+          format: spdx-json
+          output-file: sbom.spdx.json
+      - name: Attest build provenance (SLSA)
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8  # v4.2.2
+        with:
+          subject-name: ghcr.io/d10scot/ansible
+          subject-digest: ${{ needs.stage.outputs.digest }}
+          push-to-registry: true
+      - name: Attest SBOM
+        uses: actions/attest-sbom@c604332985a26aa8cf1bdc465b92731239ec6b9e  # v4.1.0
+        with:
+          subject-name: ghcr.io/d10scot/ansible
+          subject-digest: ${{ needs.stage.outputs.digest }}
+          sbom-path: sbom.spdx.json
+          push-to-registry: true
+      - name: Promote tags to the verified digest (no rebuild)
+        env:
+          DISTRO: ${{ inputs.distro }}
+          FLAVOR: ${{ inputs.flavor }}
+          CORE_VERSION: ${{ needs.stage.outputs.core_version }}
+          DH_USER: ${{ vars.DOCKERHUB_USERNAME }}
+        run: |
+          set -euo pipefail
+          [[ "$CORE_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "::error::bad core version '${CORE_VERSION}'"; exit 1; }
+          VARIANT="${FLAVOR}-${DISTRO}"
+          MINOR="${CORE_VERSION%.*}"
+          STAMP=$(date -u +%Y%m%d)
+          # Rolling: re-pointed on every publish.
+          ROLLING=("${VARIANT}" "${MINOR}-${VARIANT}" "${CORE_VERSION}-${VARIANT}")
+          if [ "$VARIANT" = "full-alpine" ]; then ROLLING+=("latest"); fi
+          # Immutable: created once, never overwritten.
+          IMMUTABLE="${CORE_VERSION}-${VARIANT}-${STAMP}"
+          REPOS=("$IMAGE")
+          if [ -n "$DH_USER" ]; then REPOS+=("docker.io/d10scot/ansible"); fi
+
+          # resolve REF: print its digest and return 0; return 3 if the registry
+          # says "not found"; return 1 on anything else (auth, 429, network), so
+          # an unreachable registry never looks like a free tag.
+          resolve() {
+            local out rc=0
+            out=$(docker buildx imagetools inspect --format '{{.Manifest.Digest}}' "$1" 2>&1) || rc=$?
+            if [ "$rc" -eq 0 ]; then printf '%s' "$out"; return 0; fi
+            case "$out" in *": not found"*) return 3 ;; esac
+            echo "::error::cannot resolve $1: ${out}" >&2
+            return 1
+          }
+
+          for repo in "${REPOS[@]}"; do
+            args=()
+            created=()
+            for t in "${ROLLING[@]}"; do args+=(--tag "${repo}:${t}"); created+=("${repo}:${t}"); done
+            rc=0; existing=$(resolve "${repo}:${IMMUTABLE}") || rc=$?
+            case "$rc" in
+              0) echo "::notice::${repo}:${IMMUTABLE} already exists (${existing}); immutable tag NOT overwritten" ;;
+              3) args+=(--tag "${repo}:${IMMUTABLE}"); created+=("${repo}:${IMMUTABLE}") ;;
+              *) exit 1 ;;
+            esac
+            docker buildx imagetools create "${args[@]}" "${IMAGE}@${DIGEST}"
+            for ref in "${created[@]}"; do
+              got=$(resolve "$ref") || { echo "::error::${ref} does not resolve after promote"; exit 1; }
+              if [ "$got" != "$DIGEST" ]; then
+                echo "::error::${ref} resolves to ${got}, expected verified digest ${DIGEST}"
+                exit 1
+              fi
+              echo "${ref} -> ${got}" | tee -a "$GITHUB_STEP_SUMMARY"
+            done
+          done

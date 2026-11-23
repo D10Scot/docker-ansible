@@ -1,17 +1,52 @@
 name: build
 on:
   pull_request:
-    paths: ["images/**", "requirements/**", ".github/workflows/build.yml"]
+    paths:
+      - "images/**"
+      - "requirements/**"
+      - ".github/workflows/build.yml"
+      - ".github/workflows/publish.yml"
+      - ".trivyignore.yaml"
+      - ".grype.yaml"
+      - "scripts/check-ignore-expiry.sh"
   push:
     branches: [main]
-    paths: ["images/**", "requirements/**", ".github/workflows/build.yml"]
-permissions:
-  contents: read
+    paths:
+      - "images/**"
+      - "requirements/**"
+      - ".github/workflows/build.yml"
+      - ".github/workflows/publish.yml"
+      - ".trivyignore.yaml"
+      - ".grype.yaml"
+      - "scripts/check-ignore-expiry.sh"
+  # Weekly rebuild: picks up OS security fixes (apk/apt upgrade at build time)
+  # with no repo change. Monday 05:00 UTC, after trivy-db-mirror (Mon 03:00).
+  schedule:
+    - cron: "0 5 * * 1"
+  workflow_dispatch:
+permissions: {}
 concurrency:
   group: build-${{ github.ref }}
-  cancel-in-progress: true
+  # Cancel superseded PR runs only. On main, a new run must never stop a publish
+  # between push and sign; it queues behind the running one instead.
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 jobs:
+  # Exceptions to the vuln gate must carry a reason and an unexpired date. Runs
+  # on every event (including the weekly schedule), because entries expire with
+  # time, not with commits.
+  ignore-expiry:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Fail on expired or expiry-less ignore entries
+        run: scripts/check-ignore-expiry.sh
+
   build-scan:
+    needs: ignore-expiry
     permissions:
       contents: read
       packages: read
@@ -43,11 +78,12 @@ jobs:
           build-args: FLAVOR=${{ matrix.flavor }}
           outputs: type=docker,dest=image.tar
           provenance: false
-      # Policy: BLOCK the build on fixable CRITICAL OS vulns and on ANY known
-      # python-dependency vuln (the python layer we fully control via the lockfile).
-      # HIGH/MEDIUM OS findings are surfaced to code scanning for visibility and
-      # absorbed on the weekly rebuild as distro fixes land — strict HIGH gating on
-      # OS packages is unwinnable while a distro's fix is still in-flight.
+      # Policy (AGENTS.md): BLOCK on fixable HIGH and CRITICAL findings (Trivy and
+      # Grype) and on ANY known python-dependency vuln (pip-audit, OSV). Unfixed
+      # OS findings are not gated (nothing to upgrade to yet). Exceptions only via the reviewed .trivyignore.yaml / .grype.yaml,
+      # each with a reason and an expiry enforced by scripts/check-ignore-expiry.sh.
+      # This PR-time matrix is early feedback; publish.yml re-runs the same gates
+      # on the exact digest it promotes.
       - name: Trivy report (HIGH+CRITICAL -> code scanning, non-blocking)
         uses: aquasecurity/trivy-action@57a97c7e7821a5776cebc9bb87c984fa69cba8f1 # v0.35.0 (documented known-good post-compromise)
         env:
@@ -61,10 +97,11 @@ jobs:
           scanners: vuln
           severity: HIGH,CRITICAL
           ignore-unfixed: true
+          trivyignores: .trivyignore.yaml
           exit-code: "0"
           format: sarif
           output: trivy.sarif
-      - name: Trivy gate (fail on fixable CRITICAL)
+      - name: Trivy gate (fail on fixable HIGH/CRITICAL)
         uses: aquasecurity/trivy-action@57a97c7e7821a5776cebc9bb87c984fa69cba8f1 # v0.35.0 (documented known-good post-compromise)
         env:
           TRIVY_DB_REPOSITORY: ghcr.io/d10scot/trivy-db:2
@@ -72,18 +109,22 @@ jobs:
         with:
           input: image.tar
           scanners: vuln
-          severity: CRITICAL
+          severity: HIGH,CRITICAL
           ignore-unfixed: true
+          trivyignores: .trivyignore.yaml
           exit-code: "1"
           format: table
-      - name: Grype scan (image, gate on fixable CRITICAL, report all)
+      - name: Grype scan (image, gate on fixable HIGH/CRITICAL)
         uses: anchore/scan-action@1638637db639e0ade3258b51db49a9a137574c3e  # v6.5.1
         id: grype
+        env:
+          # scan-action has no config input; grype reads GRYPE_CONFIG (ignore rules).
+          GRYPE_CONFIG: .grype.yaml
         with:
           image: docker-archive:image.tar
           fail-build: true
           only-fixed: true
-          severity-cutoff: critical
+          severity-cutoff: high
           output-format: sarif
           output-file: grype.sarif
       - name: pip-audit (python lockfile, digest-pinned container)
@@ -119,14 +160,16 @@ jobs:
           sarif_file: .
           category: ${{ matrix.distro }}-${{ matrix.flavor }}-${{ matrix.arch }}
 
-  # Publish only after the full scan matrix passes, and never on PRs. Each image
-  # is rebuilt multi-arch from identical pinned inputs (base digest + hash-pinned
-  # lockfile + same Dockerfile => reproducible), pushed by digest, signed keyless
-  # with cosign, and given SBOM + SLSA build-provenance attestations.
+  # Publish only from main (push, weekly schedule, or manual dispatch on main),
+  # and only after the policy check and the full PR-style scan matrix pass
+  # (pip-audit and OSV run only there). Each variant goes through publish.yml:
+  # stage (push by digest, untagged) -> verify (scan + smoke-test that digest,
+  # read-only) -> promote (sign, attest, then tag that same digest).
+  # A caller job's permissions are the ceiling for the reusable workflow's jobs;
+  # publish.yml narrows them per job (only `promote` gets id-token/attestations).
   publish:
-    needs: build-scan
-    if: github.event_name != 'pull_request'
-    runs-on: ubuntu-latest
+    needs: [ignore-expiry, build-scan]
+    if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
     permissions:
       contents: read
       packages: write
@@ -137,77 +180,13 @@ jobs:
       matrix:
         distro: [alpine, debian, ubuntu]
         flavor: [core, full, lint]
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
-        with:
-          persist-credentials: false
-      - uses: docker/setup-qemu-action@c7c53464625b32c7a7e944ae62b3e17d2b600130  # v3.7.0
-      - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f  # v3.12.0
-      - uses: sigstore/cosign-installer@7e8b541eb2e61bf99390e1afd4be13a184e9ebc5  # v3.10.1
-      - name: Login to GHCR
-        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9  # v3.7.0
-        with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
-      - name: Login to Docker Hub (only when configured)
-        if: ${{ vars.DOCKERHUB_USERNAME != '' }}
-        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9  # v3.7.0
-        with:
-          username: ${{ vars.DOCKERHUB_USERNAME }}
-          password: ${{ secrets.DOCKERHUB_TOKEN }}
-      - name: Compute tags
-        id: meta
-        env:
-          DISTRO: ${{ matrix.distro }}
-          FLAVOR: ${{ matrix.flavor }}
-          DH_USER: ${{ vars.DOCKERHUB_USERNAME }}
-        run: |
-          set -euo pipefail
-          CV=$(grep -E '^ansible-core==' "requirements/${DISTRO}-${FLAVOR}-amd64.txt" | sed -E 's/.*==([0-9]+\.[0-9]+).*/\1/')
-          add() { TAGS="${TAGS:+$TAGS,}$1"; }
-          TAGS=""
-          add "ghcr.io/d10scot/ansible:${FLAVOR}-${DISTRO}"
-          add "ghcr.io/d10scot/ansible:${CV}-${FLAVOR}-${DISTRO}"
-          [ "${FLAVOR}-${DISTRO}" = "full-alpine" ] && add "ghcr.io/d10scot/ansible:latest"
-          if [ -n "${DH_USER}" ]; then
-            add "docker.io/d10scot/ansible:${FLAVOR}-${DISTRO}"
-            add "docker.io/d10scot/ansible:${CV}-${FLAVOR}-${DISTRO}"
-            [ "${FLAVOR}-${DISTRO}" = "full-alpine" ] && add "docker.io/d10scot/ansible:latest"
-          fi
-          echo "tags=$TAGS" >> "$GITHUB_OUTPUT"
-      - name: Build and push (multi-arch, by digest)
-        id: build
-        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8  # v6.19.2
-        with:
-          context: .
-          file: images/${{ matrix.distro }}/Dockerfile
-          platforms: linux/amd64,linux/arm64
-          build-args: FLAVOR=${{ matrix.flavor }}
-          tags: ${{ steps.meta.outputs.tags }}
-          push: true
-          provenance: false
-      - name: cosign sign (keyless, recursive, by index digest)
-        env:
-          COSIGN_YES: "true"
-          DIGEST: ${{ steps.build.outputs.digest }}
-        run: cosign sign --recursive "ghcr.io/d10scot/ansible@${DIGEST}"
-      - name: Generate SBOM (syft, SPDX)
-        uses: anchore/sbom-action@66cbf4bc1f1c0d2edc94016e65bc221b6bb0ad6c  # v0.24.3
-        with:
-          image: ghcr.io/d10scot/ansible@${{ steps.build.outputs.digest }}
-          format: spdx-json
-          output-file: sbom.spdx.json
-      - name: Attest build provenance (SLSA)
-        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8  # v4.2.2
-        with:
-          subject-name: ghcr.io/d10scot/ansible
-          subject-digest: ${{ steps.build.outputs.digest }}
-          push-to-registry: true
-      - name: Attest SBOM
-        uses: actions/attest-sbom@c604332985a26aa8cf1bdc465b92731239ec6b9e  # v4.1.0
-        with:
-          subject-name: ghcr.io/d10scot/ansible
-          subject-digest: ${{ steps.build.outputs.digest }}
-          sbom-path: sbom.spdx.json
-          push-to-registry: true
+    # Kept as `./` (not the 2026-07 `$/` self-repository syntax): the signer identity
+    # users verify is this call's job_workflow_ref, ".../publish.yml@refs/heads/main",
+    # documented for `./` calls. How `$/` (resolves to the running commit) changes
+    # that claim is unverified, so switching is deferred; see docs/known-defects.md.
+    uses: ./.github/workflows/publish.yml  # zizmor: ignore[self-repository]
+    with:
+      distro: ${{ matrix.distro }}
+      flavor: ${{ matrix.flavor }}
+    secrets:
+      DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}

@@ -1,0 +1,17 @@
+# Reviewed exceptions to the Trivy vulnerability gate (fixable HIGH + CRITICAL).
+#
+# Loaded by every Trivy step in .github/workflows/build.yml and publish.yml via the
+# trivy-action `trivyignores` input (a single *.yaml file -> TRIVY_IGNOREFILE).
+#
+# Every entry MUST carry:
+#   statement:  why the finding is accepted (link the upstream tracker)
+#   expired_at: YYYY-MM-DD, after which Trivy stops ignoring it
+# scripts/check-ignore-expiry.sh fails CI on any entry that is expired or lacks either
+# field, so an exception cannot outlive its review. Keep this file empty when possible.
+#
+# Example (keep commented out):
+# vulnerabilities:
+#   - id: CVE-2026-00000
+#     statement: "util-linux fix released upstream but not yet in alpine 3.22; https://..."
+#     expired_at: 2026-12-31
+vulnerabilities: []
