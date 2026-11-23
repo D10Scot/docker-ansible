@@ -33,6 +33,9 @@ Create a TodoWrite item per step below and complete them in order.
 1. **Declare deps** — create `requirements/<flavor>.in` following the existing pattern:
    pin `ansible-core==<ver>`, reuse shared constraints via `-c core.in` (or `-c full.in`),
    and keep `setuptools` pinned (Debian's venv ships a CVE-affected setuptools).
+   Also list `pip` (unpinned): the Dockerfiles no longer run `pip install --upgrade pip`
+   (unhashed); the hash-pinned `pip` in each lockfile is installed by the
+   `--require-hashes` install.
 2. **Generate lockfiles** — produce `requirements/<distro>-<flavor>-<arch>.txt` for all
    3 distros × 2 arches (6 files). Preferred: `gh workflow run lock.yml`, wait, download
    the artifacts, and commit them. Or generate locally with `scripts/lock.sh <distro>`
@@ -53,6 +56,25 @@ Create a TodoWrite item per step below and complete them in order.
    docker run --rm variant-check ansible --version   # and id -u must be 1000
    ```
 
+## Relocking (Renovate bumped a `requirements/*.in` pin, or you edited one)
+
+Renovate bumps only the direct `name==version` pins in `requirements/*.in`. The lockfiles
+are not touched, so `scripts/check-lock-consistency.sh` (a step in `lint.yml`) fails the PR
+until they are regenerated. That red check is the intended signal, not a bug:
+
+```bash
+gh workflow run lock.yml --repo D10Scot/docker-ansible --ref <branch>
+gh run watch --repo D10Scot/docker-ansible          # pick the lock run
+gh run download <run-id> --repo D10Scot/docker-ansible --dir /tmp/locks
+cp /tmp/locks/lock-*/*.txt requirements/            # 18 files
+sh scripts/check-lock-consistency.sh                 # must print "lock consistency OK"
+```
+
+Then commit the lockfiles to the same branch. Local alternative (same recipe as CI): extract
+`/uv` from the `UV_IMAGE` in `lock.yml` with `docker create` + `docker cp`, then for each
+distro `docker run --rm -v "$PWD:/w" -v "<uv>:/usr/local/bin/uv:ro" -w /w <base@digest> sh /w/scripts/lock.sh <distro>`
+(base image + digest from the `lock.yml` matrix).
+
 ## Adding a new DISTRO (e.g. `fedora`)
 
 1. **Dockerfile** — create `images/<distro>/Dockerfile` modelled on an existing one:
@@ -61,7 +83,13 @@ Create a TodoWrite item per step below and complete them in order.
    `pip install --require-hashes -r requirements/<distro>-${FLAVOR}-${TARGETARCH}.txt`;
    no HEALTHCHECK. Resolve the base digest via `scripts/resolve-base-digests.sh`.
 2. **lock.yml matrix** — add `- {distro: <distro>, image: "<base>:<tag>"}` to
-   `.github/workflows/lock.yml`.
+   `.github/workflows/lock.yml` (digest-pinned, same digest as the Dockerfile `FROM`;
+   Renovate groups the two as "base images"). Also add the distro's Docker Hub image name
+   (e.g. `fedora`) to the `matchPackageNames` of BOTH `renovate.json` rules that list
+   `alpine`, `debian`, `ubuntu`: the "base images" group and the digest automerge rule.
+   Otherwise its bumps are neither grouped with the lock.yml matrix nor automerged.
+   `scripts/check-lock-consistency.sh` derives the expected lockfiles from `images/*/`,
+   so a new distro dir without its 6 lockfiles fails lint.
 3. **Lockfiles** — generate `requirements/<distro>-<flavor>-<arch>.txt` for every flavor
    × arch (run the lock workflow). Verify all are hashed.
 4. **CI matrix** — add `<distro>` to the `distro: [...]` list in BOTH the `build-scan` and

@@ -6,3 +6,6 @@ jmespath
 # Keep setuptools current & hash-pinned: Debian's venv ships an old, CVE-affected
 # setuptools (66.x); pinning it here upgrades it consistently across all distros.
 setuptools
+# Hash-pin pip itself: the builder installs it via --require-hashes instead of an
+# unhashed `pip install --upgrade pip` from PyPI.
+pip

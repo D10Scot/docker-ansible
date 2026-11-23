@@ -1,4 +1,4 @@
-# syntax=docker/dockerfile:1
+# syntax=docker/dockerfile:1.29.0@sha256:572cebbc2b15e6f84c077742952674889cb63cd5e9b80abdffcbe587b6f19183
 ARG FLAVOR=full
 
 FROM alpine:3.22@sha256:49340b346798875b5592e5d420241f2f9cfba5f47e62ebb1446a1b34734e898f AS builder
@@ -6,7 +6,7 @@ ARG FLAVOR
 ARG TARGETARCH
 ENV PATH=/opt/ansible/bin:$PATH VIRTUAL_ENV=/opt/ansible
 RUN apk add --no-cache python3 py3-pip build-base python3-dev libffi-dev openssl-dev cargo rust
-RUN python3 -m venv /opt/ansible && /opt/ansible/bin/pip install --no-cache-dir --upgrade pip
+RUN python3 -m venv /opt/ansible
 COPY requirements/ /tmp/requirements/
 RUN /opt/ansible/bin/pip install --no-cache-dir --require-hashes \
       -r "/tmp/requirements/alpine-${FLAVOR}-${TARGETARCH}.txt"
