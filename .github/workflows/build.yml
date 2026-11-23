@@ -180,10 +180,10 @@ jobs:
       matrix:
         distro: [alpine, debian, ubuntu]
         flavor: [core, full, lint]
-    # Kept as `./` (not the 2026-07 `$/` self-repository syntax): the signer identity
-    # users verify is this call's job_workflow_ref, ".../publish.yml@refs/heads/main",
-    # documented for `./` calls. How `$/` (resolves to the running commit) changes
-    # that claim is unverified, so switching is deferred; see docs/known-defects.md.
+    # Kept as `./` (not the 2026-07 `$/` self-repository syntax): the pinned
+    # actionlint 1.7.12 rejects `$/` for reusable-workflow calls, and the signer
+    # identity users verify (".../publish.yml@refs/heads/main", this call's
+    # job_workflow_ref) has not been confirmed for `$/`. See docs/known-defects.md D8.
     uses: ./.github/workflows/publish.yml  # zizmor: ignore[self-repository]
     with:
       distro: ${{ matrix.distro }}

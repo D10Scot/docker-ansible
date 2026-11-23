@@ -9,10 +9,11 @@
 # field and silently drops unknown keys, so this script is the only thing that
 # enforces `expires` for Grype.
 #
-# The files are parsed with a real YAML parser: yq (Go yaml.v3, the YAML family
-# Trivy and Grype also use), run as a digest-pinned container with no network.
-# The result is converted to JSON and checked with jq. That way quoted keys,
-# flow style, anchors and aliases are seen exactly as the scanners see them.
+# The files are parsed with a real YAML parser: yq, run as a digest-pinned
+# container with no network. The result is converted to JSON and checked with jq,
+# so quoted keys, flow style, anchors and aliases are resolved by YAML rules, not by
+# line patterns. Stray scanner config files that Trivy or Grype would auto-load
+# (trivy.yaml, .grype/config.yaml, ...) are rejected outright.
 #
 #   .trivyignore.yaml  top-level keys allowed: vulnerabilities misconfigurations secrets licenses
 #                      each a list of mappings with keys from: id paths purls statement expired_at
@@ -119,6 +120,17 @@ check() {
           case "$line" in FAIL*) fail=1 ;; esac
         done; exit "$fail"; }
 }
+
+# Other files the scanners would load on their own from the workspace, bypassing
+# this review. Trivy loads ./trivy.yaml by default; it was checked with trivy 0.69.3,
+# where `exit-code: 7` in ./trivy.yaml changed the exit code. Grype also searches
+# .grype/config.yaml. None of these may exist.
+for f in trivy.yaml trivy.yml .trivyignore .grype.yml .grype; do
+  if [ -e "${root}/${f}" ]; then
+    echo "FAIL ${root}/${f}: scanner config outside the reviewed ignore files is not allowed"
+    status=1
+  fi
+done
 
 check "${root}/.trivyignore.yaml" \
   '["vulnerabilities","misconfigurations","secrets","licenses"]' \

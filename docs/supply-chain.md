@@ -92,11 +92,12 @@ not gated, because there is nothing to upgrade to. When a fix lands, the next bu
 
 `scripts/check-ignore-expiry.sh` runs in CI on every event, including the weekly
 schedule. It parses both files with a real YAML parser (a digest-pinned `yq`
-container), so quoted keys, flow style and anchors are read the way the scanners read
-them. It fails on any entry that is expired, has no expiry, has no reason or has no
+container), so quoted keys, flow style and anchors are resolved by YAML rules, not by
+line patterns. It fails on any entry that is expired, has no expiry, has no reason or has no
 CVE/ID. It also fails on any top-level key outside a small allowlist: for Grype only
 `ignore` is allowed, so a setting like `exclude` or `only-fixed` cannot weaken the gate
-outside review. Duplicate keys and multiple YAML documents fail as well. Trivy
+outside review. Duplicate keys and multiple YAML documents fail as well, and so does any
+stray config file the scanners would load on their own (`trivy.yaml`, `.grype/`, …). Trivy
 also stops honouring an entry after `expired_at`. Grype has no expiry field of its own
 and ignores the `expires` key, so for Grype the script is the only enforcement. Both
 files are empty today.

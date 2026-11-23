@@ -24,7 +24,7 @@ want to reject.
 ## Prerequisites
 
 - [`cosign`](https://docs.sigstore.dev/cosign/system_config/installation/) ≥ 2.0
-- [`gh`](https://cli.github.com/) ≥ 2.49 (for `gh attestation verify`)
+- [`gh`](https://cli.github.com/) ≥ 2.68 (for `gh attestation verify --source-ref`; tested with 2.103.3)
 
 ## Copy-paste commands
 
