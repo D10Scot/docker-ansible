@@ -9,6 +9,7 @@ permissions: {}
 env:
   # Digest-pinned; the repo .hadolint.yaml is mounted (stdin mode never read it).
   HADOLINT_IMAGE: hadolint/hadolint:v2.15.1@sha256:32dac94127fd60b7b7e3fbfc65e1383b9b5e25c9bfd7b8536de7a539fe68a12d
+  RENOVATE_IMAGE: ghcr.io/renovatebot/renovate:44.222.5@sha256:8a4c49ef19bb71bedf4eaa4d1087a31a1793bd53de41478753d2d648e53eed19
   ACTIONLINT_IMAGE: rhysd/actionlint:1.7.12@sha256:b1934ee5f1c509618f2508e6eb47ee0d3520686341fec936f3b79331f9315667
   GITLEAKS_IMAGE: ghcr.io/gitleaks/gitleaks:v8.30.1@sha256:c00b6bd0aeb3071cbcb79009cb16a60dd9e0a7c60e2be9ab65d25e6bc8abbb7f
 
@@ -36,6 +37,14 @@ jobs:
 
       - name: lockfile consistency (.in pins == lockfile pins)
         run: sh scripts/check-lock-consistency.sh
+
+      - name: lockfile consistency checker tests
+        run: sh scripts/tests/test-check-lock-consistency.sh
+
+      # Renovate's own validator (RE2 regex engine, as in production): a config that
+      # fails validation halts ALL dependency updates for the repo.
+      - name: renovate config validator
+        run: docker run --rm -v "$PWD:/repo:ro" -w /repo "$RENOVATE_IMAGE" renovate-config-validator --strict renovate.json
 
       # Digest-pinned container: the rhysd/actionlint action builds from floating
       # golang:latest / alpine:latest images.
