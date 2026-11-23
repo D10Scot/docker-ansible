@@ -40,8 +40,10 @@ Together they give you a reproducible build that is also patched.
 
 All Python packages (Ansible, ansible-lint, and their transitive deps) are installed
 from lockfiles (`requirements/*.txt`) generated with
-`uv pip compile --generate-hashes --python-platform` (one lockfile per
-distro × flavor × arch = 18 total).
+`uv pip compile --upgrade --generate-hashes --python-platform --exclude-newer "7 days"`
+(see `scripts/lock.sh`; one lockfile per distro × flavor × arch = 18 total), run inside
+the digest-pinned base image with a digest-pinned `uv`. `--exclude-newer` applies the
+7-day release-age cooldown to transitive dependencies too, not just direct ones.
 `pip install --require-hashes` enforces that _every_ package matches its recorded hash
 before installation.
 

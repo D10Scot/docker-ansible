@@ -35,9 +35,9 @@ Create a TodoWrite item per step below and complete them in order.
    and keep `setuptools` pinned (Debian's venv ships a CVE-affected setuptools).
 2. **Generate lockfiles** — produce `requirements/<distro>-<flavor>-<arch>.txt` for all
    3 distros × 2 arches (6 files). Preferred: `gh workflow run lock.yml`, wait, download
-   the artifacts, and commit them. Or generate locally with the `lock.yml` recipe
-   (`uv pip compile --python-platform <triple> --generate-hashes` run **inside each base
-   image** so the distro's Python version is used; do NOT use `--universal` — it pulls
+   the artifacts, and commit them. Or generate locally with `scripts/lock.sh <distro>`
+   run **inside the digest-pinned base image** with a pinned `uv` mounted on PATH (see
+   `lock.yml` for the exact `docker run`), so the distro's Python version is used; do NOT use `--universal` — it pulls
    ansible-lint's yanked win32 sentinel). Verify all are hashed:
    `grep -L -- '--hash=sha256' requirements/*-<flavor>-*.txt` must print nothing.
 3. **Add to the CI matrix** — add `<flavor>` to the `flavor: [...]` list in BOTH the
