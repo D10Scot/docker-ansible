@@ -8,9 +8,13 @@
 # Every entry MUST carry:
 #   reason:  why the finding is accepted (link the upstream tracker)
 #   expires: YYYY-MM-DD
+# Every entry also needs `vulnerability:`.
 # Grype itself has NO expiry support and silently ignores the `expires` key, so
 # scripts/check-ignore-expiry.sh is the only enforcement: it fails CI on any entry
-# that is expired or lacks either field. Keep this list empty when possible.
+# that is expired or lacks a field. `ignore` is the ONLY top-level key allowed here:
+# any other Grype setting (exclude, ignore-states, only-fixed, fail-on-severity, ...)
+# could weaken the gate outside review, so the check rejects it. Gate settings live in
+# the workflow inputs. Keep this list empty when possible.
 #
 # Example (keep commented out):
 # ignore:

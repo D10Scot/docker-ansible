@@ -6,8 +6,10 @@
 # Every entry MUST carry:
 #   statement:  why the finding is accepted (link the upstream tracker)
 #   expired_at: YYYY-MM-DD, after which Trivy stops ignoring it
-# scripts/check-ignore-expiry.sh fails CI on any entry that is expired or lacks either
-# field, so an exception cannot outlive its review. Keep this file empty when possible.
+# plus `id:`. scripts/check-ignore-expiry.sh parses this file with a real YAML parser
+# and fails CI on any entry that is expired or lacks a field, and on any top-level key
+# other than vulnerabilities / misconfigurations / secrets / licenses. An exception
+# cannot outlive its review. Keep this file empty when possible.
 #
 # Example (keep commented out):
 # vulnerabilities:
