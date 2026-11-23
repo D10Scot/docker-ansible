@@ -35,48 +35,61 @@ docker run --rm \
 
 - `<flavor>-<distro>` — rolling, rebuilt weekly with the latest OS patches
   (e.g. `full-alpine`, `core-debian`, `lint-ubuntu`).
-- `<corever>-<flavor>-<distro>` — pinned to an `ansible-core` minor when you want a
-  stable target (e.g. `2.21-core-debian`).
+- `<major.minor>-<flavor>-<distro>` / `<core>-<flavor>-<distro>` — also rolling (rebuilt
+  weekly), but they stay on one `ansible-core` minor or release (e.g. `X.Y-core-debian`,
+  `X.Y.Z-core-debian`).
+- `<core>-<flavor>-<distro>-<YYYYMMDD>` — one build. Our pipeline creates it once and
+  never re-points it (that is our policy; the registry does not enforce it), e.g.
+  `X.Y.Z-core-debian-YYYYMMDD`.
+- `@sha256:<digest>` — the strongest pin; signatures and attestations are bound to it.
 - `latest` — alias for `full-alpine`.
 
 👉 See the **Tags** tab above for the full, current list.
 
 | Distro | Version | Architectures |
 |---|---|---|
-| Alpine | 3.22 | amd64 · arm64 |
-| Debian | 13 (trixie) | amd64 · arm64 |
-| Ubuntu | 24.04 LTS | amd64 · arm64 |
+| Alpine | current stable | amd64 · arm64 |
+| Debian | current stable | amd64 · arm64 |
+| Ubuntu | current LTS | amd64 · arm64 |
+
+The exact base image is pinned by digest in each `images/<distro>/Dockerfile`.
 
 ## Why you'll like it
 
 - 🛡️ **Non-root** by default (uid 1000)
 - 🪶 **Lean runtime** — multi-stage build, no compilers or dev headers shipped
-- 📌 **Reproducible** — digest-pinned base images + fully hash-pinned Python deps (`pip install --require-hashes`)
+- 📌 **Pinned inputs** — digest-pinned base images + fully hash-pinned Python deps (`pip install --require-hashes`)
 - 🔄 **Always fresh** — rebuilt weekly with the latest OS security patches
-- 🔍 **Scanned every build** — Trivy, Grype, pip-audit, and OSV-Scanner
-- ✍️ **Signed & attested** — cosign signatures, SBOM (SPDX), and SLSA build provenance
+- 🔍 **Scanned every build** — Trivy, Grype, pip-audit, and OSV-Scanner; fixable HIGH/CRITICAL findings block, and the digest that is scanned is the digest that ships
+- ✍️ **Signed & attested** — cosign signatures, an SBOM (SPDX) per architecture, and SLSA build provenance
 - 🔗 **Tamper-evident pipeline** — every GitHub Action pinned by commit SHA
 
 ## Verify it yourself
 
-Don't take our word for it — every image is cryptographically verifiable. The
-signatures, SBOMs, and provenance attestations live on **GitHub Container Registry**
-(`ghcr.io/d10scot/ansible`), which exposes them via the OCI Referrers API, so they're
-discoverable straight from the image digest:
+Don't take our word for it — every image is cryptographically verifiable. Our
+pipeline pushes the signatures, SBOMs, and provenance attestations only to **GitHub
+Container Registry** (`ghcr.io/d10scot/ansible`); the Docker Hub copy has the same
+digest but nothing attached. Verify against GHCR:
 
 ```bash
 IMAGE=ghcr.io/d10scot/ansible:full-alpine
 cosign verify \
   --certificate-oidc-issuer=https://token.actions.githubusercontent.com \
-  --certificate-identity-regexp='^https://github.com/D10Scot/docker-ansible/\.github/workflows/build\.yml@refs/.*$' \
+  --certificate-identity=https://github.com/D10Scot/docker-ansible/.github/workflows/publish.yml@refs/heads/main \
   "$IMAGE"
 ```
 
-The full walkthrough — signature, SLSA provenance, SBOM, and verifying by digest — lives
-in the GitHub repo: **[docs/verify.md](https://github.com/D10Scot/docker-ansible/blob/main/docs/verify.md)**.
+Images published before our reusable publish workflow first ran (until then, every
+tag) are signed by `build.yml` instead: use
+`--certificate-identity=https://github.com/D10Scot/docker-ansible/.github/workflows/build.yml@refs/heads/main`
+for those.
 
-*Pull from Docker Hub for convenience; verify against GHCR for assurance (Docker Hub
-doesn't serve the attestations).*
+The full walkthrough — signature, SLSA provenance, SBOM, verifying by digest, and
+verifying a Docker Hub pull with `COSIGN_REPOSITORY` — lives in the GitHub repo:
+**[docs/verify.md](https://github.com/D10Scot/docker-ansible/blob/main/docs/verify.md)**.
+
+*Pull from Docker Hub for convenience; verify against GHCR for assurance (we sign and
+attest only there).*
 
 ## Links
 
