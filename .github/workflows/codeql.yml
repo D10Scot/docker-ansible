@@ -6,8 +6,7 @@ on:
     branches: [main]
   schedule:
     - cron: "0 5 * * 1"
-permissions:
-  contents: read
+permissions: {}
 jobs:
   analyze:
     name: Analyze (${{ matrix.language }})

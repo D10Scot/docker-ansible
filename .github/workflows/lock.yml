@@ -3,15 +3,18 @@ on:
   workflow_dispatch:
   push:
     paths: ["requirements/*.in", "scripts/lock.sh", ".github/workflows/lock.yml"]
-permissions:
-  contents: read
+permissions: {}
 jobs:
   lock:
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     strategy:
       matrix:
         # Digest-pinned to the SAME base the Dockerfiles use, so the resolver sees
-        # the exact Python that will run the lockfile. Keep in sync with images/*/Dockerfile.
+        # the exact Python that will run the lockfile. Keep in sync with images/*/Dockerfile:
+        # Renovate bumps these and the Dockerfile FROMs together as one "base images" PR
+        # (see renovate.json); if you edit one by hand, edit the other.
         include:
           - {distro: alpine, image: "alpine:3.22@sha256:49340b346798875b5592e5d420241f2f9cfba5f47e62ebb1446a1b34734e898f"}
           - {distro: debian, image: "debian:13@sha256:9c6e381421d0f48d1b8133e573f33c185ee16cbf505eda9c4a8a4791b25ea8a6"}

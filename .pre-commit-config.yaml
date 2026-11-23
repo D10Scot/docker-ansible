@@ -1,7 +1,15 @@
 repos:
-  - repo: https://github.com/hadolint/hadolint
-    rev: v2.15.1
-    hooks: [{id: hadolint-docker}]
+  # Local docker_image hook instead of the upstream hadolint-docker hook, whose entry is
+  # a floating ghcr.io/hadolint/hadolint tag. Keep this image in sync with
+  # HADOLINT_IMAGE in .github/workflows/lint.yml (Renovate tracks both).
+  - repo: local
+    hooks:
+      - id: hadolint
+        name: hadolint (digest-pinned image)
+        language: docker_image
+        entry: hadolint/hadolint:v2.15.1@sha256:32dac94127fd60b7b7e3fbfc65e1383b9b5e25c9bfd7b8536de7a539fe68a12d hadolint --config .hadolint.yaml
+        files: (^|/)Dockerfile$
+        types: [file]
   - repo: https://github.com/rhysd/actionlint
     rev: v1.7.12
     hooks: [{id: actionlint}]
