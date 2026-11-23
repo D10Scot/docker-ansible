@@ -1,4 +1,4 @@
-# syntax=docker/dockerfile:1
+# syntax=docker/dockerfile:1.29.0@sha256:572cebbc2b15e6f84c077742952674889cb63cd5e9b80abdffcbe587b6f19183
 ARG FLAVOR=full
 
 FROM ubuntu:24.04@sha256:9c7f200c07e3d4a03e7249d2c16bf66a51120fb876aa2242cf31451412543289 AS builder
@@ -9,7 +9,7 @@ RUN apt-get update \
  && apt-get install -y --no-install-recommends \
       python3 python3-venv python3-dev gcc libffi-dev libssl-dev cargo rustc \
  && rm -rf /var/lib/apt/lists/*
-RUN python3 -m venv /opt/ansible && /opt/ansible/bin/pip install --no-cache-dir --upgrade pip
+RUN python3 -m venv /opt/ansible
 COPY requirements/ /tmp/requirements/
 RUN /opt/ansible/bin/pip install --no-cache-dir --require-hashes \
       -r "/tmp/requirements/ubuntu-${FLAVOR}-${TARGETARCH}.txt"
