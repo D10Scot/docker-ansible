@@ -25,10 +25,15 @@ on:
     - cron: "0 5 * * 1"
   workflow_dispatch:
 permissions: {}
+env:
+  # BuildKit image for setup-buildx, digest-pinned (resolved with `imagetools inspect`).
+  BUILDKIT_IMAGE: docker.io/moby/buildkit:v0.35.0@sha256:aa632b921ef07411d2cb77292cd34213d4f7b384001d6fceef1e1f25bf9752bb
 concurrency:
   group: build-${{ github.ref }}
-  # Cancel superseded PR runs only. On main, a new run must never stop a publish
-  # between push and sign; it queues behind the running one instead.
+  # Cancel superseded PR runs only. On main, a running publish is never cancelled
+  # between push and sign. GitHub keeps at most one PENDING run per group: when a
+  # newer run queues, an already-pending (not yet started) run is cancelled, which
+  # is harmless because it never started publishing.
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 jobs:
   # Exceptions to the vuln gate must carry a reason and an unexpired date. Runs
@@ -36,6 +41,7 @@ jobs:
   # time, not with commits.
   ignore-expiry:
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     permissions:
       contents: read
     steps:
@@ -47,6 +53,8 @@ jobs:
 
   build-scan:
     needs: ignore-expiry
+    # A normal cell takes ~15-19 min; a hung apt mirror must not hold a runner for hours.
+    timeout-minutes: 45
     permissions:
       contents: read
       packages: read
@@ -63,6 +71,8 @@ jobs:
         with:
           persist-credentials: false
       - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f  # v3.12.0
+        with:
+          driver-opts: image=${{ env.BUILDKIT_IMAGE }}
       - name: Authenticate to GHCR (for mirrored Trivy DB)
         uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9  # v3.7.0
         with:
@@ -128,15 +138,24 @@ jobs:
           output-format: sarif
           output-file: grype.sarif
       - name: pip-audit (python lockfile, digest-pinned container)
-        # Run pip-audit via a digest-pinned container with --no-deps so it audits
-        # every pinned line in our already-fully-resolved lockfile WITHOUT a
-        # dry-run reinstall. The pypa action force-enables require-hashes + a
-        # dry-run install, which fails when the lockfile targets a newer Python
-        # (Debian trixie 3.13) than the runner (3.12) and a py3.12-only transitive
-        # would be required. python:3.13 covers all our lockfiles.
+        # Run pip-audit via a digest-pinned container with --no-deps: it audits the
+        # exact pins in our fully-resolved lockfile without installing them, so the
+        # container's Python version does not have to match the image's. (The pypa
+        # action forces a dry-run install, which fails when a lockfile targets a
+        # newer Python than the runner.)
+        # Caveat, verified with pip-audit 2.10.1: a line with an environment marker
+        # that does not match this interpreter (e.g. `; python_version >= "3.14"`
+        # under 3.13) is SKIPPED silently. Our lockfiles are compiled per
+        # environment (scripts/lock.sh, no --universal), so uv emits no markers;
+        # the guard below fails if one ever appears, rather than auditing less.
         env:
           LOCKFILE: requirements/${{ matrix.distro }}-${{ matrix.flavor }}-${{ matrix.arch }}.txt
         run: |
+          set -euo pipefail
+          if grep -nE '^[^#[:space:]-][^#]*;' "$LOCKFILE"; then
+            echo "::error::${LOCKFILE} has environment markers; pip-audit --no-deps would skip non-matching lines"
+            exit 1
+          fi
           docker run --rm -v "$PWD:/src" -w /src -e LOCKFILE="$LOCKFILE" \
             python:3.13-slim@sha256:e48f59cdba69a3cbd9ed2cf0f348d90d45a8d350d98134cf1070bc106ee9ed90 \
             sh -ceu '

@@ -77,8 +77,11 @@ check() {
   printf '%s\n' "$json" | jq -r --arg file "$file" --arg today "$today" \
     --argjson allowed "$allowed" --argjson entrykeys "$entrykeys" \
     --arg idkey "$idkey" --arg reasonkey "$reasonkey" --arg expkey "$expkey" '
+    # Shape check, then a calendar check: parse, normalise and re-format. An
+    # impossible date such as 2027-02-31 normalises to another day and is rejected.
     def isdate: type == "string"
-      and test("^[0-9]{4}-(0[1-9]|1[0-2])-(0[1-9]|[12][0-9]|3[01])$");
+      and test("^[0-9]{4}-(0[1-9]|1[0-2])-(0[1-9]|[12][0-9]|3[01])$")
+      and (. as $d | try ((strptime("%Y-%m-%d") | mktime | strftime("%Y-%m-%d")) == $d) catch false);
     def nonempty: type == "string" and (gsub("\\s"; "") | length) > 0;
     def allowedin($list): . as $k | $list | any(. == $k);
     if type != "object" then
@@ -104,7 +107,7 @@ check() {
                     else "FAIL \($file): \($at): has no \($reasonkey)" end ),
                   ( if $e[$expkey] == null then "FAIL \($file): \($at): has no \($expkey)"
                     elif ($e[$expkey] | isdate | not) then
-                      "FAIL \($file): \($at): \($expkey) \($e[$expkey] | tojson) is not YYYY-MM-DD"
+                      "FAIL \($file): \($at): \($expkey) \($e[$expkey] | tojson) is not a real YYYY-MM-DD date"
                     elif $e[$expkey] <= $today then
                       "FAIL \($file): \($at): expired on \($e[$expkey]) (today \($today))"
                     else empty end )

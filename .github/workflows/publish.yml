@@ -34,11 +34,17 @@ permissions: {}
 
 env:
   IMAGE: ghcr.io/d10scot/ansible
+  # Tool images, digest-pinned (resolved with `docker buildx imagetools inspect`).
+  BINFMT_IMAGE: docker.io/tonistiigi/binfmt:qemu-v10.2.3@sha256:400a4873b838d1b89194d982c45e5fb3cda4593fbfd7e08a02e76b03b21166f0
+  BUILDKIT_IMAGE: docker.io/moby/buildkit:v0.35.0@sha256:aa632b921ef07411d2cb77292cd34213d4f7b384001d6fceef1e1f25bf9752bb
+  SYFT_IMAGE: ghcr.io/anchore/syft:v1.57.1@sha256:03215d0e98b661d0ecbc8575dbc14d65be1743b5de5df6410aecb7e80f95b060
 
 jobs:
   stage:
     name: stage (${{ inputs.flavor }}-${{ inputs.distro }})
     runs-on: ubuntu-latest
+    # Multi-arch build (arm64 under QEMU); a normal run is ~20-30 min.
+    timeout-minutes: 90
     permissions:
       contents: read
       packages: write
@@ -80,7 +86,11 @@ jobs:
           fi
           echo "core_version=${AMD}" >> "$GITHUB_OUTPUT"
       - uses: docker/setup-qemu-action@c7c53464625b32c7a7e944ae62b3e17d2b600130  # v3.7.0
+        with:
+          image: ${{ env.BINFMT_IMAGE }}
       - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f  # v3.12.0
+        with:
+          driver-opts: image=${{ env.BUILDKIT_IMAGE }}
       - name: Login to GHCR
         uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9  # v3.7.0
         with:
@@ -111,8 +121,10 @@ jobs:
   verify:
     name: verify (${{ inputs.flavor }}-${{ inputs.distro }}, ${{ matrix.arch }})
     needs: stage
-    # Read-only: no packages: write, no id-token, no security-events. A poisoned
-    # scanner here has nothing to push or sign with.
+    # Read-only: no packages: write, no id-token, no security-events. Every scanner
+    # and the SBOM generator run here, so a poisoned tool has nothing to push or
+    # sign with.
+    timeout-minutes: 45
     permissions:
       contents: read
       packages: read
@@ -127,6 +139,8 @@ jobs:
         with:
           persist-credentials: false
       - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f  # v3.12.0
+        with:
+          driver-opts: image=${{ env.BUILDKIT_IMAGE }}
       - name: Login to GHCR (read-only token; staged digest + mirrored Trivy DB)
         uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9  # v3.7.0
         with:
@@ -152,6 +166,7 @@ jobs:
           child=$(jq -r --arg a "$ARCH" '.manifests[] | select(.platform.os == "linux" and .platform.architecture == $a) | .digest' <<<"$json")
           [[ "$child" =~ ^sha256:[0-9a-f]{64}$ ]] || { echo "::error::no single linux/${ARCH} manifest (got '${child}')"; exit 1; }
           echo "ref=${IMAGE}@${child}" >> "$GITHUB_OUTPUT"
+          echo "digest=${child}" >> "$GITHUB_OUTPUT"
           echo "linux/${ARCH}: ${IMAGE}@${child} (index ${INDEX_DIGEST})" | tee -a "$GITHUB_STEP_SUMMARY"
       - name: Check ignore-file expiry
         run: scripts/check-ignore-expiry.sh
@@ -201,13 +216,40 @@ jobs:
           uid=$(docker run --rm "$REF" id -u)
           [ "$uid" = "1000" ] || { echo "::error::image runs as uid ${uid}, expected 1000"; exit 1; }
           echo "smoke OK: ${first}; uid ${uid}"
+      # SBOM for THIS platform's manifest, generated here (read-only job) with a
+      # digest-pinned syft container, not in `promote`. The pull is anonymous (the
+      # package is public); no registry credential is given to syft.
+      - name: Generate SBOM (syft, SPDX) for this arch's digest
+        env:
+          CHILD: ${{ steps.child.outputs.digest }}
+        run: |
+          set -euo pipefail
+          mkdir -p sbom-out
+          docker run --rm --read-only --tmpfs /tmp:rw,mode=1777 -e HOME=/tmp \
+            --user "$(id -u):$(id -g)" -v "$PWD/sbom-out:/out" \
+            "$SYFT_IMAGE" scan "registry:${IMAGE}@${CHILD}" \
+            -o spdx-json=/out/sbom.spdx.json -q
+          jq -e '.spdxVersion == "SPDX-2.3" and (.packages | length) > 0' sbom-out/sbom.spdx.json >/dev/null \
+            || { echo "::error::syft produced no usable SPDX 2.3 SBOM"; exit 1; }
+          printf '%s\n' "$CHILD" > sbom-out/digest.txt
+      - name: Upload SBOM artifact
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9  # v7.0.2
+        with:
+          name: sbom-${{ inputs.distro }}-${{ inputs.flavor }}-${{ matrix.arch }}
+          path: sbom-out/
+          if-no-files-found: error
+          retention-days: 7
 
   promote:
     name: promote (${{ inputs.flavor }}-${{ inputs.distro }})
     needs: [stage, verify]
     runs-on: ubuntu-latest
-    # The only job holding signing (id-token), attestation and push rights.
-    # No checkout: no repository code runs alongside these credentials.
+    timeout-minutes: 30
+    # The only job holding signing (id-token), attestation and push rights. No
+    # scanner and no SBOM generator runs here: the SBOMs come from `verify` as
+    # artifacts. With these credentials run only: the docker login/buildx actions,
+    # cosign (fetched by cosign-installer), the attest and artifact actions, `gh api`
+    # and `imagetools`. There is no checkout, so no repository script runs here.
     permissions:
       contents: read
       packages: write
@@ -220,7 +262,27 @@ jobs:
         run: |
           set -euo pipefail
           [[ "$DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]] || { echo "::error::bad digest '${DIGEST}'"; exit 1; }
+      # Re-running an old run's promote would move the rolling tags back to an older
+      # build. Refuse unless this run's commit is still main's HEAD. Fail closed if
+      # the API cannot answer.
+      - name: Refuse unless this commit is main's current HEAD
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RUN_SHA: ${{ github.sha }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          head=$(gh api "repos/${REPO}/git/ref/heads/main" --jq '.object.sha') \
+            || { echo "::error::cannot read main's HEAD from the GitHub API; refusing to promote"; exit 1; }
+          [[ "$head" =~ ^[0-9a-f]{40}$ ]] || { echo "::error::unexpected main HEAD '${head}'; refusing to promote"; exit 1; }
+          if [ "$head" != "$RUN_SHA" ]; then
+            echo "::error::this run is for ${RUN_SHA}, but main is now ${head}; refusing to promote (it would move tags backwards). A newer run publishes main."
+            exit 1
+          fi
+          echo "main HEAD ${head} == run commit"
       - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f  # v3.12.0
+        with:
+          driver-opts: image=${{ env.BUILDKIT_IMAGE }}
       - uses: sigstore/cosign-installer@7e8b541eb2e61bf99390e1afd4be13a184e9ebc5  # v3.10.1
       - name: Login to GHCR
         uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9  # v3.7.0
@@ -240,24 +302,71 @@ jobs:
         env:
           COSIGN_YES: "true"
         run: cosign sign --recursive "${IMAGE}@${DIGEST}"
-      - name: Generate SBOM (syft, SPDX) from the verified digest
-        uses: anchore/sbom-action@66cbf4bc1f1c0d2edc94016e65bc221b6bb0ad6c  # v0.24.3
-        with:
-          image: ghcr.io/d10scot/ansible@${{ needs.stage.outputs.digest }}
-          format: spdx-json
-          output-file: sbom.spdx.json
       - name: Attest build provenance (SLSA)
         uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8  # v4.2.2
         with:
           subject-name: ghcr.io/d10scot/ansible
           subject-digest: ${{ needs.stage.outputs.digest }}
           push-to-registry: true
-      - name: Attest SBOM
+      - name: Download per-arch SBOMs from verify
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333  # v8.0.2
+        with:
+          pattern: sbom-${{ inputs.distro }}-${{ inputs.flavor }}-*
+          path: sbom
+      # Each SBOM must belong to a platform manifest of THIS verified index: resolve
+      # the children again from the index digest and compare with what verify recorded.
+      - name: Match SBOMs to the verified index's per-arch digests
+        id: children
+        env:
+          DISTRO: ${{ inputs.distro }}
+          FLAVOR: ${{ inputs.flavor }}
+        run: |
+          set -euo pipefail
+          json=$(docker buildx imagetools inspect --format '{{json .Manifest}}' "${IMAGE}@${DIGEST}")
+          [ "$(jq -r '.digest' <<<"$json")" = "$DIGEST" ] || { echo "::error::registry returned a different index"; exit 1; }
+          for arch in amd64 arm64; do
+            child=$(jq -r --arg a "$arch" '.manifests[] | select(.platform.os == "linux" and .platform.architecture == $a) | .digest' <<<"$json")
+            [[ "$child" =~ ^sha256:[0-9a-f]{64}$ ]] || { echo "::error::no single linux/${arch} manifest"; exit 1; }
+            dir="sbom/sbom-${DISTRO}-${FLAVOR}-${arch}"
+            recorded=$(cat "${dir}/digest.txt")
+            if [ "$recorded" != "$child" ]; then
+              echo "::error::SBOM for ${arch} was made from ${recorded}, but the index holds ${child}"
+              exit 1
+            fi
+            jq -e '.spdxVersion == "SPDX-2.3"' "${dir}/sbom.spdx.json" >/dev/null
+            echo "${arch}=${child}" >> "$GITHUB_OUTPUT"
+          done
+      # Subjects: each per-arch SBOM is attested against its own platform manifest
+      # (what a runtime actually pulls) AND against the index digest, so
+      # `gh attestation verify oci://<tag> --predicate-type ...spdx...` (which resolves
+      # a tag to the index) finds an SBOM for each architecture.
+      - name: Attest SBOM (amd64 -> amd64 manifest)
+        uses: actions/attest-sbom@c604332985a26aa8cf1bdc465b92731239ec6b9e  # v4.1.0
+        with:
+          subject-name: ghcr.io/d10scot/ansible
+          subject-digest: ${{ steps.children.outputs.amd64 }}
+          sbom-path: sbom/sbom-${{ inputs.distro }}-${{ inputs.flavor }}-amd64/sbom.spdx.json
+          push-to-registry: true
+      - name: Attest SBOM (arm64 -> arm64 manifest)
+        uses: actions/attest-sbom@c604332985a26aa8cf1bdc465b92731239ec6b9e  # v4.1.0
+        with:
+          subject-name: ghcr.io/d10scot/ansible
+          subject-digest: ${{ steps.children.outputs.arm64 }}
+          sbom-path: sbom/sbom-${{ inputs.distro }}-${{ inputs.flavor }}-arm64/sbom.spdx.json
+          push-to-registry: true
+      - name: Attest SBOM (amd64 -> index)
         uses: actions/attest-sbom@c604332985a26aa8cf1bdc465b92731239ec6b9e  # v4.1.0
         with:
           subject-name: ghcr.io/d10scot/ansible
           subject-digest: ${{ needs.stage.outputs.digest }}
-          sbom-path: sbom.spdx.json
+          sbom-path: sbom/sbom-${{ inputs.distro }}-${{ inputs.flavor }}-amd64/sbom.spdx.json
+          push-to-registry: true
+      - name: Attest SBOM (arm64 -> index)
+        uses: actions/attest-sbom@c604332985a26aa8cf1bdc465b92731239ec6b9e  # v4.1.0
+        with:
+          subject-name: ghcr.io/d10scot/ansible
+          subject-digest: ${{ needs.stage.outputs.digest }}
+          sbom-path: sbom/sbom-${{ inputs.distro }}-${{ inputs.flavor }}-arm64/sbom.spdx.json
           push-to-registry: true
       - name: Promote tags to the verified digest (no rebuild)
         env:
