@@ -7,3 +7,6 @@ mitogen
 pywinrm
 netaddr
 setuptools
+# Hash-pin pip itself: the builder installs it via --require-hashes instead of an
+# unhashed `pip install --upgrade pip` from PyPI.
+pip
