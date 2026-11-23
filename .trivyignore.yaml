@@ -16,4 +16,15 @@
 #   - id: CVE-2026-00000
 #     statement: "util-linux fix released upstream but not yet in alpine 3.22; https://..."
 #     expired_at: 2026-12-31
-vulnerabilities: []
+vulnerabilities:
+  # pip 26.3 vendors setuptools 70.3.0's pkg_resources/__init__.py only and lists
+  # "setuptools 70.3.0" in pip/_vendor/bom.cdx.json, which Trivy reads. The CVE is in
+  # setuptools/package_index.py (easy_install-era PackageIndex.download), which is not
+  # vendored: `find / -name package_index.py` in the image is empty. Grype does not flag it.
+  # The venv's own setuptools (84.2.1, hash-pinned) is a different purl and stays gated.
+  # Revisit when pip re-vendors a setuptools >= 78.1.1.
+  - id: CVE-2025-47273
+    purls:
+      - pkg:pypi/setuptools@70.3.0
+    statement: "pip-vendored pkg_resources from setuptools 70.3.0; vulnerable package_index.py not shipped. https://github.com/pypa/setuptools/security/advisories/GHSA-5rjg-fvgr-3xxf"
+    expired_at: 2027-02-28
