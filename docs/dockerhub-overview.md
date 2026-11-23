@@ -35,8 +35,12 @@ docker run --rm \
 
 - `<flavor>-<distro>` — rolling, rebuilt weekly with the latest OS patches
   (e.g. `full-alpine`, `core-debian`, `lint-ubuntu`).
-- `<corever>-<flavor>-<distro>` — pinned to an `ansible-core` minor when you want a
-  stable target (e.g. `2.21-core-debian`).
+- `<major.minor>-<flavor>-<distro>` / `<core>-<flavor>-<distro>` — also rolling (rebuilt
+  weekly), but they stay on one `ansible-core` minor or release (e.g. `2.21-core-debian`,
+  `2.21.6-core-debian`).
+- `<core>-<flavor>-<distro>-<YYYYMMDD>` — **immutable**: one build, never overwritten
+  (e.g. `2.21.6-core-debian-20261123`).
+- `@sha256:<digest>` — the strongest pin; signatures and attestations are bound to it.
 - `latest` — alias for `full-alpine`.
 
 👉 See the **Tags** tab above for the full, current list.
@@ -51,9 +55,9 @@ docker run --rm \
 
 - 🛡️ **Non-root** by default (uid 1000)
 - 🪶 **Lean runtime** — multi-stage build, no compilers or dev headers shipped
-- 📌 **Reproducible** — digest-pinned base images + fully hash-pinned Python deps (`pip install --require-hashes`)
+- 📌 **Pinned inputs** — digest-pinned base images + fully hash-pinned Python deps (`pip install --require-hashes`)
 - 🔄 **Always fresh** — rebuilt weekly with the latest OS security patches
-- 🔍 **Scanned every build** — Trivy, Grype, pip-audit, and OSV-Scanner
+- 🔍 **Scanned every build** — Trivy, Grype, pip-audit, and OSV-Scanner; fixable HIGH/CRITICAL findings block, and the digest that is scanned is the digest that ships
 - ✍️ **Signed & attested** — cosign signatures, SBOM (SPDX), and SLSA build provenance
 - 🔗 **Tamper-evident pipeline** — every GitHub Action pinned by commit SHA
 
@@ -68,7 +72,7 @@ discoverable straight from the image digest:
 IMAGE=ghcr.io/d10scot/ansible:full-alpine
 cosign verify \
   --certificate-oidc-issuer=https://token.actions.githubusercontent.com \
-  --certificate-identity-regexp='^https://github.com/D10Scot/docker-ansible/\.github/workflows/build\.yml@refs/.*$' \
+  --certificate-identity=https://github.com/D10Scot/docker-ansible/.github/workflows/publish.yml@refs/heads/main \
   "$IMAGE"
 ```
 

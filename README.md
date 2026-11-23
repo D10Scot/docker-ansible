@@ -2,7 +2,7 @@
 
 [![OpenSSF Scorecard](https://api.scorecard.dev/projects/github.com/D10Scot/docker-ansible/badge)](https://scorecard.dev/viewer/?uri=github.com/D10Scot/docker-ansible)
 [![Signed with cosign](https://img.shields.io/badge/signed%20with-cosign-blue?logo=sigstore)](docs/verify.md)
-[![SLSA Build L2](https://slsa.dev/images/gh-badge-level2.svg)](docs/supply-chain.md)
+[![SLSA Build L3](https://slsa.dev/images/gh-badge-level3.svg)](docs/supply-chain.md#7-slsa-build-provenance-level-3)
 [![Build](https://github.com/D10Scot/docker-ansible/actions/workflows/build.yml/badge.svg)](https://github.com/D10Scot/docker-ansible/actions/workflows/build.yml)
 
 Supply-chain-hardened, multi-distro (Alpine/Debian/Ubuntu), multi-arch (amd64/arm64)
@@ -18,13 +18,20 @@ docker run --rm -v "$PWD:/ansible" ghcr.io/d10scot/ansible:full-alpine \
 
 ## Tags
 
-| Tag | Description |
-|---|---|
-| `latest` | Alias for `full-alpine` |
-| `full-alpine` · `core-alpine` · `lint-alpine` | Rolling — rebuilt weekly with latest OS patches |
-| `full-debian` · `core-debian` · `lint-debian` | Rolling — Debian trixie (13, Python 3.13) |
-| `full-ubuntu` · `core-ubuntu` · `lint-ubuntu` | Rolling — latest Ubuntu LTS |
-| `<corever>-full-alpine` · `<corever>-core-debian` · … | Immutable — e.g. `2.21-full-alpine` |
+| Tag | Moves? | Description |
+|---|---|---|
+| `latest` | Rolling | Alias for `full-alpine` |
+| `<flavor>-<distro>` | Rolling | e.g. `full-alpine`, `core-debian`, `lint-ubuntu`; rebuilt weekly with the latest OS patches |
+| `<major.minor>-<flavor>-<distro>` | Rolling | Tracks an `ansible-core` minor line, e.g. `2.21-full-alpine` |
+| `<core>-<flavor>-<distro>` | Rolling | Tracks an exact `ansible-core` release, e.g. `2.21.6-full-alpine`; still rebuilt weekly for OS patches |
+| `<core>-<flavor>-<distro>-<YYYYMMDD>` | **Never** | One build, e.g. `2.21.6-full-alpine-20261123`; created once, never overwritten, never patched |
+| `@sha256:<digest>` | **Never** | The strongest pin: content-addressed, and what signatures and attestations are bound to |
+
+Distros: Alpine 3.22, Debian trixie (13, Python 3.13), Ubuntu 24.04 LTS.
+
+Pin by digest (or the dated tag) for reproducibility; follow a rolling tag to get the
+weekly OS patches. Resolve a tag to its digest with
+`docker buildx imagetools inspect --format '{{.Manifest.Digest}}' ghcr.io/d10scot/ansible:full-alpine`.
 
 **Flavors:**
 - `core` — `ansible-core` only
@@ -39,7 +46,9 @@ linux/arm64), and are digest-pinnable and signed. See [Supply chain security](#s
 Every image is:
 
 - Built from digest-pinned base images with OS packages upgraded at build time
-- Scanned for vulnerabilities (Trivy, Grype, pip-audit, OSV-Scanner) before publish
+- Scanned for vulnerabilities (Trivy, Grype, pip-audit, OSV-Scanner) before publish;
+  fixable HIGH/CRITICAL findings block. The digest that is scanned is the digest that
+  is tagged and signed. Nothing is rebuilt after the scan.
 - Signed with [cosign keyless signing](docs/verify.md) tied to our GitHub Actions workflow identity
 - Accompanied by an **SBOM (SPDX)** and **SLSA build-provenance attestation**
 
@@ -51,17 +60,22 @@ control and its rationale.
 ```bash
 IMAGE=ghcr.io/d10scot/ansible:full-alpine
 
-# 1. Signature (keyless) — identity pinned to our publish workflow
+# 1. Signature (keyless): exact identity of our publish workflow on main
 cosign verify \
   --certificate-oidc-issuer=https://token.actions.githubusercontent.com \
-  --certificate-identity-regexp='^https://github.com/D10Scot/docker-ansible/\.github/workflows/build\.yml@refs/.*$' \
+  --certificate-identity=https://github.com/D10Scot/docker-ansible/.github/workflows/publish.yml@refs/heads/main \
   "$IMAGE"
 
-# 2. SLSA build provenance
-gh attestation verify "oci://$IMAGE" -R D10Scot/docker-ansible
+# 2. SLSA build provenance, signed by the reusable publish workflow, from main
+gh attestation verify "oci://$IMAGE" -R D10Scot/docker-ansible \
+  --signer-workflow D10Scot/docker-ansible/.github/workflows/publish.yml \
+  --source-ref refs/heads/main --deny-self-hosted-runners
 
 # 3. SBOM attestation
-gh attestation verify "oci://$IMAGE" -R D10Scot/docker-ansible --predicate-type https://spdx.dev/Document/v2.3
+gh attestation verify "oci://$IMAGE" -R D10Scot/docker-ansible \
+  --signer-workflow D10Scot/docker-ansible/.github/workflows/publish.yml \
+  --source-ref refs/heads/main --deny-self-hosted-runners \
+  --predicate-type https://spdx.dev/Document/v2.3
 
 # 4. Everything attached
 cosign tree "$IMAGE"
