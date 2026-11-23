@@ -23,7 +23,7 @@ Actions are excluded from automerge (14-day minimum release age + manual approva
 
 ## 2. Base images pinned by digest + OS patches applied at build
 
-`FROM alpine:3.22@sha256:…` and equivalent Debian/Ubuntu lines ensure we always build
+Each Dockerfile's `FROM <distro>:<version>@sha256:…` line ensures we always build
 from the exact image we reviewed — a tag bump cannot silently swap in a different layer.
 
 At the same time, `RUN apk upgrade --no-cache` (Alpine) / `apt-get upgrade` (Debian,
@@ -105,24 +105,57 @@ files are empty today.
 **The pipeline, per image variant** (`.github/workflows/publish.yml`, run only on `main`):
 
 1. **stage:** build multi-arch **once** and push to GHCR **by digest, untagged**. This
-   job holds only `packages: write`.
+   job holds only `packages: write`. QEMU (`tonistiigi/binfmt`) and BuildKit
+   (`moby/buildkit`) run from digest-pinned images.
 2. **verify:** a separate job with a **read-only** token (no `packages: write`, no
    `id-token`). For each architecture, on a native runner, it scans that exact digest
    with the Trivy and Grype gates above. It then smoke-tests it: `ansible --version`
    must report the locked ansible-core version, the image must run as uid 1000, and
    the architecture must match.
-3. **promote:** only after verify passes. It cosign-signs the digest, generates the SBOM
-   from it and attests provenance and SBOM. Only then does it point the tags at that
-   **same digest** with `docker buildx imagetools create`, on GHCR and (when configured)
-   Docker Hub, and assert that every tag resolves to it. This is the only job with
-   `id-token`, `attestations` or signing rights, and it checks out no repository code.
+3. **sbom:** a separate, minimal job (`packages: read` only; no checkout, no scanner,
+   no third-party action except `actions/upload-artifact`). It runs a digest-pinned
+   `syft` container on each architecture's platform manifest, with an anonymous pull,
+   checks that each SPDX document describes that manifest digest, and uploads each
+   file unarchived. It reports both the scanned digests and each artifact's sha256
+   as job outputs. It is kept apart from `verify` so that no scanner can modify an
+   SBOM that is later attested.
+4. **promote:** only after verify and sbom pass, and only if this run's commit is
+   still `main`'s HEAD (checked with the GitHub API, failing closed). Without that
+   check, re-running an old run could move the rolling tags back to an older build.
+   It cosign-signs the index digest (recursively), attests build provenance on it,
+   and attests the SBOMs after the checks below. Only then does it point the tags at
+   that **same digest** with `docker buildx imagetools create`, on GHCR and (when
+   configured) Docker Hub, and assert that every tag resolves to it. This is the only
+   job with `id-token`, `attestations` or signing rights. It runs **no scanner and no
+   SBOM generator**, and checks out no repository code. What does run with those
+   credentials is the Docker login and buildx actions, cosign (downloaded by
+   `sigstore/cosign-installer`), the attest and artifact actions, `gh api` and
+   `docker buildx imagetools`.
+
+**SBOM trust chain** (checked in `promote` before any SBOM is attested):
+
+1. `actions/download-artifact` (v8.0.2, `digest-mismatch: error`) hashes the bytes it
+   downloads and fails if they differ from the digest GitHub recorded at upload.
+2. Each file's `sha256sum` must equal the `artifact-digest` that the `sbom` job itself
+   reported as a job output. With `archive: false`, that digest is the hash of the
+   file's own bytes, so like is compared with like. This catches an artifact replaced
+   by any other job in the run, because only the `sbom` job can set its outputs.
+3. The per-arch digests the `sbom` job scanned must equal the platform manifests of
+   the index that `verify` passed, re-resolved from the registry in `promote`.
+4. Each SBOM's SPDX root package (the document's single `DESCRIBES` target) must carry
+   that exact manifest digest as its `versionInfo` and SHA256 checksum.
+
+Each per-arch SBOM is then attested against its own platform manifest digest *and*
+against the index digest. A tag resolves to the index, so verifying a tag finds an
+SBOM for every architecture.
 
 A PR-time matrix (`build-scan` in `build.yml`) runs the same Trivy and Grype gates plus
 pip-audit and OSV-Scanner on local archives with **no push credentials**, as early
 feedback. Publishing also requires it to pass.
 
-**Why it matters:** a scanner, even a compromised one, never runs in a job that can push
-or sign. The bytes that are tagged and signed are the bytes that were scanned, not a
+**Why it matters:** no scanner and no SBOM generator, even a compromised one, runs in
+a job that can push, sign or attest, and a scanner cannot alter an SBOM before it is
+attested. The bytes that are tagged and signed are the bytes that were scanned, not a
 later rebuild that pulled different packages from a live mirror.
 
 **Trivy DB provenance:** Trivy's vulnerability DBs are mirrored weekly
@@ -169,9 +202,12 @@ See [`docs/verify.md`](verify.md) for copy-paste verification commands.
 
 ## 6. SBOM (SPDX) attestation
 
-A Software Bill of Materials in SPDX 2.3 format is attached to every image as an OCI
-attestation. It lists every OS package and Python package present in the image, with
-versions and checksums.
+A Software Bill of Materials in SPDX 2.3 format is generated **per architecture** by a
+digest-pinned `syft`, from that architecture's platform manifest. It is attested on
+that manifest and on the multi-arch index (see the trust chain in §4). It lists every OS
+package and Python package present in the image, with versions and checksums.
+Digests published before `publish.yml` carry one SBOM on the index that describes only
+amd64.
 
 This lets you audit the exact bill of materials for any image you run, feed it into your
 own vulnerability scanners, or satisfy supply-chain compliance requirements (e.g. US EO
@@ -223,11 +259,14 @@ Caveats, stated plainly:
 
 ## 8. GHCR as canonical attestation registry; Docker Hub as mirror
 
-Attestations (signatures, SBOMs, provenance) are stored as OCI 1.1 Referrers objects on
-`ghcr.io/d10scot/ansible`. Docker Hub does not implement the OCI Referrers API, so
-attestations are **not available via `docker.io/d10scot/ansible`**.
-
-Always verify against the GHCR canonical reference. See [`docs/verify.md`](verify.md).
+The pipeline pushes signatures, SBOMs and provenance **only** to
+`ghcr.io/d10scot/ansible`. The cosign signature is a `sha256-<digest>.sig` tag; the
+attestations are OCI 1.1 referrers. `promote` copies just the image manifest to Docker
+Hub, so the Docker Hub copy has the same digest but nothing attached. To verify a Docker
+Hub pull, either use the GHCR reference with the same digest, or set
+`COSIGN_REPOSITORY=ghcr.io/d10scot/ansible` for cosign. `gh attestation verify` works on
+either reference, because it looks attestations up by digest in GitHub's API. See
+[`docs/verify.md`](verify.md#note-on-docker-hub).
 
 ---
 

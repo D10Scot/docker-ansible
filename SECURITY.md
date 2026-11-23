@@ -22,17 +22,17 @@ OS packages (`apk upgrade` / `apt-get upgrade`):
 |---|---|---|
 | `latest` | Rolling | Alias for `full-alpine` |
 | `<flavor>-<distro>` | Rolling | e.g. `full-alpine`, `core-debian`, `lint-ubuntu` |
-| `<major.minor>-<flavor>-<distro>` | Rolling | Tracks an ansible-core minor, e.g. `2.21-full-alpine` |
-| `<core>-<flavor>-<distro>` | Rolling | Tracks an exact ansible-core release, e.g. `2.21.6-full-alpine`; still rebuilt weekly |
-| `<core>-<flavor>-<distro>-<YYYYMMDD>` | **Immutable** | One build, e.g. `2.21.6-full-alpine-20261123`; never overwritten |
-| `@sha256:<digest>` | **Immutable** | Strongest pin; signatures and attestations are bound to the digest |
+| `<major.minor>-<flavor>-<distro>` | Rolling | Tracks an ansible-core minor, e.g. `X.Y-full-alpine` |
+| `<core>-<flavor>-<distro>` | Rolling | Tracks an exact ansible-core release, e.g. `X.Y.Z-full-alpine`; still rebuilt weekly |
+| `<core>-<flavor>-<distro>-<YYYYMMDD>` | Fixed by policy | One build, e.g. `X.Y.Z-full-alpine-YYYYMMDD`. The pipeline creates it once and skips it if it exists; the registry does not enforce this |
+| `@sha256:<digest>` | **Immutable** | Strongest pin; content-addressed, and signatures and attestations are bound to it |
 
 All published digests are signed with cosign keyless signing and carry SBOM and SLSA
 build-provenance attestations. See [`docs/verify.md`](docs/verify.md) for verification
 commands.
 
-Immutable references (dated tags and digests) are **never** rebuilt and accumulate
-OS-level CVEs over time. Follow a rolling tag if you want automatic patch coverage. If
+Dated tags and digests are not rebuilt, so they accumulate OS-level CVEs over time.
+Only a digest is truly immutable. Follow a rolling tag if you want automatic patch coverage. If
 you pin a dated tag or digest, you take responsibility for moving to a newer one.
 
 ## Weekly Rebuild Cadence
@@ -40,7 +40,7 @@ you pin a dated tag or digest, you take responsibility for moving to a newer one
 A scheduled CI run (`.github/workflows/build.yml`, `schedule`) rebuilds every variant
 each week. Each build is scanned, and fixable HIGH or CRITICAL findings block it.
 Only the exact digest that passed is tagged and signed. This picks up OS-level
-security patches released upstream (Alpine, Debian trixie, Ubuntu) even when the
+security patches released upstream (Alpine, Debian, Ubuntu) even when the
 Ansible versions have not changed.
 
 If a weekly build is blocked (for example by a Python advisory that needs a lockfile
