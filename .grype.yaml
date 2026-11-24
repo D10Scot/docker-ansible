@@ -19,6 +19,6 @@
 # Example (keep commented out):
 # ignore:
 #   - vulnerability: CVE-2026-00000
-#     reason: "util-linux fix released upstream but not yet in alpine 3.22; https://..."
+#     reason: "util-linux fix released upstream but not yet in alpine <ver>; https://..."
 #     expires: 2026-12-31
 ignore: []

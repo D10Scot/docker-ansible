@@ -14,7 +14,7 @@
 # Example (keep commented out):
 # vulnerabilities:
 #   - id: CVE-2026-00000
-#     statement: "util-linux fix released upstream but not yet in alpine 3.22; https://..."
+#     statement: "util-linux fix released upstream but not yet in alpine <ver>; https://..."
 #     expired_at: 2026-12-31
 vulnerabilities:
   # pip 26.3 vendors setuptools 70.3.0's pkg_resources/__init__.py only and lists
