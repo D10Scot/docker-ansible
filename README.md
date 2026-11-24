@@ -27,6 +27,9 @@ docker run --rm -v "$PWD:/ansible" ghcr.io/d10scot/ansible:full-alpine \
 | `<core>-<flavor>-<distro>-<YYYYMMDD>` | Not by policy | One build, e.g. `X.Y.Z-full-alpine-YYYYMMDD`. The pipeline creates it once and skips it if it already exists; the registry itself does not stop a tag moving. Never patched. |
 | `@sha256:<digest>` | **Never** | The strongest pin: content-addressed, and what signatures and attestations are bound to |
 
+Only the ansible-core version currently in `main` is rebuilt. When the repo moves to a
+newer core, the older `X.Y-*` and `X.Y.Z-*` tags stop moving and receive no further OS patches.
+
 Distros: current Alpine stable, Debian stable and Ubuntu LTS. The exact base image is
 pinned by digest in `images/<distro>/Dockerfile`.
 

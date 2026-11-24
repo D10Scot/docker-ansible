@@ -27,6 +27,9 @@ OS packages (`apk upgrade` / `apt-get upgrade`):
 | `<core>-<flavor>-<distro>-<YYYYMMDD>` | Fixed by policy | One build, e.g. `X.Y.Z-full-alpine-YYYYMMDD`. The pipeline creates it once and skips it if it exists; the registry does not enforce this |
 | `@sha256:<digest>` | **Immutable** | Strongest pin; content-addressed, and signatures and attestations are bound to it |
 
+Only the ansible-core version currently in `main` is rebuilt. When the repo moves to a
+newer core, the older `X.Y-*` and `X.Y.Z-*` tags stop moving and receive no further OS patches.
+
 All published digests are signed with cosign keyless signing and carry SBOM and SLSA
 build-provenance attestations. See [`docs/verify.md`](docs/verify.md) for verification
 commands.

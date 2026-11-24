@@ -1,7 +1,7 @@
 # syntax=docker/dockerfile:1.29.0@sha256:572cebbc2b15e6f84c077742952674889cb63cd5e9b80abdffcbe587b6f19183
 ARG FLAVOR=full
 
-FROM alpine:3.22@sha256:49340b346798875b5592e5d420241f2f9cfba5f47e62ebb1446a1b34734e898f AS builder
+FROM alpine:3.24@sha256:f59abe656b692d901e184be3445e084786602108599d2a51d229c0f5a48c71bf AS builder
 ARG FLAVOR
 ARG TARGETARCH
 ENV PATH=/opt/ansible/bin:$PATH VIRTUAL_ENV=/opt/ansible
@@ -11,7 +11,7 @@ COPY requirements/ /tmp/requirements/
 RUN /opt/ansible/bin/pip install --no-cache-dir --require-hashes \
       -r "/tmp/requirements/alpine-${FLAVOR}-${TARGETARCH}.txt"
 
-FROM alpine:3.22@sha256:49340b346798875b5592e5d420241f2f9cfba5f47e62ebb1446a1b34734e898f AS runtime
+FROM alpine:3.24@sha256:f59abe656b692d901e184be3445e084786602108599d2a51d229c0f5a48c71bf AS runtime
 ARG FLAVOR
 RUN apk upgrade --no-cache \
  && apk add --no-cache python3 openssh-client sshpass git rsync ca-certificates \

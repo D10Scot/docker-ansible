@@ -37,7 +37,8 @@ docker run --rm \
   (e.g. `full-alpine`, `core-debian`, `lint-ubuntu`).
 - `<major.minor>-<flavor>-<distro>` / `<core>-<flavor>-<distro>` — also rolling (rebuilt
   weekly), but they stay on one `ansible-core` minor or release (e.g. `X.Y-core-debian`,
-  `X.Y.Z-core-debian`).
+  `X.Y.Z-core-debian`). Only the current `ansible-core` line is rebuilt; older `X.Y-*` /
+  `X.Y.Z-*` tags stop moving once we move to a newer core.
 - `<core>-<flavor>-<distro>-<YYYYMMDD>` — one build. Our pipeline creates it once and
   never re-points it (that is our policy; the registry does not enforce it), e.g.
   `X.Y.Z-core-debian-YYYYMMDD`.
