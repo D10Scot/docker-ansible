@@ -28,7 +28,7 @@ RUN apt-get update \
  && groupadd -g 1000 ansible \
  && useradd -u 1000 -g 1000 -m -d /home/ansible ansible \
  && rm -rf /var/lib/apt/lists/* \
- && rm -f /usr/bin/pebble
+ && rm -rf /usr/bin/pebble /var/lib/pebble
 COPY --from=builder /opt/ansible /opt/ansible
 ENV PATH=/opt/ansible/bin:$PATH VIRTUAL_ENV=/opt/ansible \
     ANSIBLE_FORCE_COLOR=1 PYTHONUNBUFFERED=1

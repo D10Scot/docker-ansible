@@ -6,7 +6,7 @@ already there and do not bring back something removed on purpose. Each entry say
 it was checked and whether it is **open** (should be fixed) or **accepted** (kept on
 purpose, with the reason).
 
-Last reviewed: 2026-11-23.
+Last reviewed: 2026-11-24.
 
 ## Pipeline and scheduling
 
@@ -34,6 +34,7 @@ Last reviewed: 2026-11-23.
 | I1 | Accepted | **The runtime images keep the OS package manager** (`apk` on Alpine, `apt-get` on Debian/Ubuntu) **and `pip`** in `/opt/ansible`. This is against the "no package manager in the runtime stage" hardening rule. | `docker run … core-alpine`: `/sbin/apk`, `pip 26.1.2`; `core-debian`: `/usr/bin/apt-get`, `pip 26.1.2`. Accepted because downstream users extend the image (extra collections, system packages). `pip` itself is being hash-pinned in a separate PR. |
 | I2 | Accepted | **The Debian runtime ships perl**, pulled in as a dependency of `git`. | `core-debian`: `dpkg-query` shows git `Depends: … perl, liberror-perl …` and perl 5.40.1-6 installed. `git` is needed by `ansible-galaxy` and for git-sourced roles. |
 | I3 | Fixed for new publishes | **Digests published before `publish.yml` carry one SBOM on the index, which describes only amd64.** syft resolved the index to the runner's platform. | `gh attestation verify oci://ghcr.io/d10scot/ansible:latest … --predicate-type https://spdx.dev/Document/v2.3`: package URLs carry `arch=x86_64` only. From the first `publish.yml` run on, the `sbom` job makes one SBOM per platform manifest (checked locally: the arm64 manifest gives `arch=aarch64`). Each is attested on its manifest and on the index. Old digests are not re-attested. |
+| I4 | Accepted | **The Ubuntu runtime deletes `/usr/bin/pebble` (and `/var/lib/pebble`) from the base image.** The `ubuntu:26.04` base is a Canonical rock that ships pebble (a Go service manager), which no dpkg package owns, so `apt-get upgrade` can never patch it. The bytes remain in the base layer: scanners reading the merged filesystem honour the deletion, but anyone unpacking layers still sees the file. | 2026-11-24: Grype v0.97.1 matched 8 fixable HIGH Go stdlib CVEs (go1.27.3; fixed 1.26.11 / 1.27.4) in `/usr/bin/pebble` and failed every ubuntu leg of run 45453610450. Base config is `Entrypoint: null`, `Cmd: ["/bin/bash"]`, so nothing here uses pebble. A `dpkg -S` sweep of all executables on both arches found no other unowned ELF/Go binary. Drop the `rm` once Canonical packages or removes pebble and Grype stays clean without it. |
 
 ## Distribution and verification
 
