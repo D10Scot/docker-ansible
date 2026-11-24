@@ -1,0 +1,24 @@
+# Grype configuration: reviewed exceptions to the Grype vulnerability gate
+# (fixable HIGH + CRITICAL).
+#
+# anchore/scan-action has no config input; it runs grype in the workspace with the
+# job's environment. Grype auto-loads ./.grype.yaml, and the workflows also set
+# GRYPE_CONFIG=.grype.yaml explicitly so the file is used even if cwd changes.
+#
+# Every entry MUST carry:
+#   reason:  why the finding is accepted (link the upstream tracker)
+#   expires: YYYY-MM-DD
+# Every entry also needs `vulnerability:`.
+# Grype itself has NO expiry support and silently ignores the `expires` key, so
+# scripts/check-ignore-expiry.sh is the only enforcement: it fails CI on any entry
+# that is expired or lacks a field. `ignore` is the ONLY top-level key allowed here:
+# any other Grype setting (exclude, ignore-states, only-fixed, fail-on-severity, ...)
+# could weaken the gate outside review, so the check rejects it. Gate settings live in
+# the workflow inputs. Keep this list empty when possible.
+#
+# Example (keep commented out):
+# ignore:
+#   - vulnerability: CVE-2026-00000
+#     reason: "util-linux fix released upstream but not yet in alpine 3.22; https://..."
+#     expires: 2026-12-31
+ignore: []
